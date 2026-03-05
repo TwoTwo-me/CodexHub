@@ -46,7 +46,7 @@ export default defineConfig({
     "import.meta.env.VITE_WORKTREE_NAME": JSON.stringify(worktreeName),
   },
   server: {
-    host: "0.0.0.0",
+    host: process.env.CODEXUI_DEV_HOST?.trim() || "127.0.0.1",
     port: 5173,
     watch: {
       ignored: [
