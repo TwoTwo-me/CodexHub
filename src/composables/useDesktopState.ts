@@ -57,6 +57,7 @@ const FALLBACK_SERVER_OPTION: CodexServerInfo = {
   id: '',
   label: 'Default server',
   description: '',
+  transport: 'local',
 }
 
 function loadReadStateMap(): Record<string, string> {
@@ -644,10 +645,20 @@ function normalizeServerList(value: CodexServerInfo[]): CodexServerInfo[] {
     const id = row.id.trim()
     const label = row.label.trim() || id || FALLBACK_SERVER_OPTION.label
     const description = row.description.trim()
+    const transport = row.transport === 'relay' ? 'relay' : 'local'
+    const relayAgentId = typeof row.relayAgentId === 'string' ? row.relayAgentId.trim() : ''
+    const relayE2eeKeyId = typeof row.relayE2eeKeyId === 'string' ? row.relayE2eeKeyId.trim() : ''
     const dedupeKey = id || label
     if (seen.has(dedupeKey)) continue
     seen.add(dedupeKey)
-    next.push({ id, label, description })
+    next.push({
+      id,
+      label,
+      description,
+      transport,
+      ...(transport === 'relay' && relayAgentId ? { relayAgentId } : {}),
+      ...(transport === 'relay' && relayE2eeKeyId ? { relayE2eeKeyId } : {}),
+    })
   }
   return next
 }

@@ -17,6 +17,11 @@ import {
   isRelayChannelId,
   type RelayChannelId,
 } from '../types/relayProtocol.js'
+import {
+  RELAY_E2EE_ALGORITHM,
+  RELAY_E2EE_RPC_METHOD,
+  normalizeRelayE2eeEnvelope,
+} from '../types/relayE2ee.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -37,8 +42,9 @@ type JsonRpcResponse = {
 }
 
 type RpcProxyRequest = {
-  method: string
+  method?: string
   params?: unknown
+  e2ee?: unknown
 }
 
 type ServerRequestReply = {
@@ -71,7 +77,7 @@ type CodexRelayServerConfig = {
 
 type CodexRelayE2eeConfig = {
   keyId: string
-  algorithm: 'aes-256-gcm'
+  algorithm: typeof RELAY_E2EE_ALGORITHM
 }
 
 type CodexServerTransport = 'local' | 'relay'
@@ -426,7 +432,6 @@ const SERVER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const RELAY_AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const LEGACY_RELAY_AGENT_ID_PATTERN = /^agent:([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/u
 const RELAY_E2EE_KEY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
-const RELAY_E2EE_ALGORITHM = 'aes-256-gcm' as const
 const DEFAULT_RELAY_PROTOCOL = 'relay-http-v1'
 const MIN_RELAY_TIMEOUT_MS = 5_000
 const MAX_RELAY_TIMEOUT_MS = 300_000
@@ -2167,9 +2172,15 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
         const payload = await readJsonBody(req)
         const body = asRecord(payload) as RpcProxyRequest | null
+        const method = typeof body?.method === 'string' ? body.method.trim() : ''
+        const encryptedRelayPayload = body ? normalizeRelayE2eeEnvelope(body.e2ee) : null
+        if (body?.e2ee !== undefined && encryptedRelayPayload === null) {
+          setJson(res, 400, { error: 'Invalid body: malformed relay E2EE envelope' })
+          return
+        }
 
-        if (!body || typeof body.method !== 'string' || body.method.length === 0) {
-          setJson(res, 400, { error: 'Invalid body: expected { method, params? }' })
+        if (!body || (method.length === 0 && encryptedRelayPayload === null)) {
+          setJson(res, 400, { error: 'Invalid body: expected { method, params? } or { e2ee }' })
           return
         }
 
@@ -2179,15 +2190,33 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             setJson(res, 503, { error: `Relay server "${resolved.server.id}" is missing relay configuration` })
             return
           }
+          if (encryptedRelayPayload) {
+            const relayE2eeConfig = relayConfig.e2ee
+            if (!relayE2eeConfig) {
+              setJson(res, 409, { error: `Relay server "${resolved.server.id}" does not allow E2EE payloads` })
+              return
+            }
+            if (
+              encryptedRelayPayload.keyId !== relayE2eeConfig.keyId
+              || encryptedRelayPayload.algorithm !== relayE2eeConfig.algorithm
+            ) {
+              setJson(res, 400, { error: 'Relay E2EE payload does not match configured relay policy' })
+              return
+            }
+          }
           try {
+            const relayMethod = encryptedRelayPayload ? RELAY_E2EE_RPC_METHOD : method
+            const relayParams = encryptedRelayPayload
+              ? { e2ee: encryptedRelayPayload }
+              : (body.params ?? null)
             const result = await relayHub.dispatchRpc(
               {
                 scopeKey: resolved.scope.cacheKey,
                 serverId: resolved.server.id,
                 agentId: relayConfig.agentId,
               },
-              body.method,
-              body.params ?? null,
+              relayMethod,
+              relayParams,
               relayConfig.requestTimeoutMs,
             )
             setJson(res, 200, { result })
@@ -2200,8 +2229,13 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
         }
 
+        if (encryptedRelayPayload) {
+          setJson(res, 409, { error: 'Relay E2EE payloads are only supported for relay transport servers' })
+          return
+        }
+
         const runtime = requireLocalRuntime(resolved, 'RPC proxy')
-        const result = await runtime.appServer.rpc(body.method, body.params ?? null)
+        const result = await runtime.appServer.rpc(method, body.params ?? null)
         setJson(res, 200, { result })
         return
       }

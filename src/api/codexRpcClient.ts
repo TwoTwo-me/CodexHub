@@ -5,16 +5,25 @@ import {
   RELAY_SERVER_ID_HEADER,
   normalizeRelayChannelId,
 } from '../types/relayProtocol'
+import { normalizeRelayE2eeEnvelope, type RelayE2eeEnvelope } from '../types/relayE2ee'
+import { decryptRelayE2eePayload, encryptRelayE2eePayload } from '../utils/relayE2eeCrypto'
 import { CodexApiError, extractErrorMessage } from './codexErrors'
 
 type RpcRequestBody = {
-  method: string
+  method?: string
   params?: unknown
+  e2ee?: RelayE2eeEnvelope
+}
+
+type ScopedRelayE2eeConfig = {
+  keyId: string
+  passphrase: string
 }
 
 type ScopedRequestOptions = {
   serverId?: string
   channelId?: string
+  relayE2ee?: ScopedRelayE2eeConfig
 }
 
 export type RpcNotification = {
@@ -79,12 +88,34 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function normalizeRelayE2eeConfig(config: ScopedRelayE2eeConfig | undefined): ScopedRelayE2eeConfig | undefined {
+  if (!config) return undefined
+  const keyId = typeof config.keyId === 'string' ? config.keyId.trim() : ''
+  const passphrase = typeof config.passphrase === 'string' ? config.passphrase : ''
+  if (!keyId || !passphrase) return undefined
+  return { keyId, passphrase }
+}
+
 export async function rpcCall<T>(method: string, params?: unknown, options: ScopedRequestOptions = {}): Promise<T> {
   const scopedServerId = normalizeServerId(options.serverId)
   const scopedChannelId = normalizeChannelId(options.channelId)
-  const body: RpcRequestBody = {
-    method,
-    params: params ?? null,
+  const relayE2ee = normalizeRelayE2eeConfig(options.relayE2ee)
+  let body: RpcRequestBody
+  if (relayE2ee) {
+    body = {
+      e2ee: await encryptRelayE2eePayload(
+        {
+          method,
+          params: params ?? null,
+        },
+        relayE2ee,
+      ),
+    }
+  } else {
+    body = {
+      method,
+      params: params ?? null,
+    }
   }
 
   let response: Response
@@ -119,6 +150,33 @@ export async function rpcCall<T>(method: string, params?: unknown, options: Scop
         status: response.status,
       },
     )
+  }
+
+  if (relayE2ee) {
+    const envelopeRecord = asRecord(payload)
+    const encryptedResult = normalizeRelayE2eeEnvelope(asRecord(envelopeRecord?.result)?.e2ee)
+    if (!encryptedResult) {
+      throw new CodexApiError(`RPC ${method} returned malformed encrypted envelope`, {
+        code: 'invalid_response',
+        method,
+        status: response.status,
+      })
+    }
+
+    const decryptedPayload = await decryptRelayE2eePayload(encryptedResult, relayE2ee)
+    const decryptedRecord = asRecord(decryptedPayload)
+    const decryptedError = asRecord(decryptedRecord?.error)
+    if (decryptedError) {
+      const message = typeof decryptedError.message === 'string' && decryptedError.message.trim().length > 0
+        ? decryptedError.message
+        : `RPC ${method} failed in encrypted relay response`
+      throw new CodexApiError(message, {
+        code: 'rpc_error',
+        method,
+        status: response.status,
+      })
+    }
+    return (decryptedRecord?.result as T) ?? (null as T)
   }
 
   const envelope = payload as RpcEnvelope<T> | null

@@ -34,6 +34,9 @@ export type CodexServerInfo = {
   id: string
   label: string
   description: string
+  transport: 'local' | 'relay'
+  relayAgentId?: string
+  relayE2eeKeyId?: string
 }
 
 export type CodexServerDirectory = {
@@ -42,6 +45,8 @@ export type CodexServerDirectory = {
 }
 
 let activeServerId = ''
+const serverInfoById = new Map<string, CodexServerInfo>()
+const relayE2eePassphraseByServerId = new Map<string, string>()
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -72,6 +77,11 @@ function normalizeServerEntries(payload: unknown): CodexServerDirectory {
     const id = readString(record.id) || readString(record.serverId) || readString(record.server_id)
     const label = readString(record.label) || readString(record.name) || readString(record.title) || id
     const description = readString(record.description) || readString(record.details)
+    const transport = readString(record.transport) === 'relay' ? 'relay' : 'local'
+    const relay = asRecord(record.relay)
+    const relayAgentId = readString(relay?.agentId)
+    const relayE2ee = asRecord(relay?.e2ee)
+    const relayE2eeKeyId = readString(relayE2ee?.keyId)
     const dedupeKey = id || label
     if (!dedupeKey || seen.has(dedupeKey)) continue
     seen.add(dedupeKey)
@@ -80,6 +90,9 @@ function normalizeServerEntries(payload: unknown): CodexServerDirectory {
       id,
       label: label || 'Default server',
       description,
+      transport,
+      ...(transport === 'relay' && relayAgentId ? { relayAgentId } : {}),
+      ...(transport === 'relay' && relayE2eeKeyId ? { relayE2eeKeyId } : {}),
     })
   }
 
@@ -89,8 +102,28 @@ function normalizeServerEntries(payload: unknown): CodexServerDirectory {
   }
 }
 
-function scopedServerOptions(): { serverId?: string } {
-  return activeServerId ? { serverId: activeServerId } : {}
+function scopedServerOptions(): { serverId?: string; relayE2ee?: { keyId: string; passphrase: string } } {
+  const options: {
+    serverId?: string
+    relayE2ee?: { keyId: string; passphrase: string }
+  } = {}
+
+  if (activeServerId) {
+    options.serverId = activeServerId
+  }
+
+  const activeServer = activeServerId ? serverInfoById.get(activeServerId) : undefined
+  if (activeServer?.relayE2eeKeyId) {
+    const passphrase = relayE2eePassphraseByServerId.get(activeServer.id) ?? ''
+    if (passphrase.length > 0) {
+      options.relayE2ee = {
+        keyId: activeServer.relayE2eeKeyId,
+        passphrase,
+      }
+    }
+  }
+
+  return options
 }
 
 export function setActiveServerId(serverId: string): void {
@@ -104,9 +137,25 @@ export function getActiveServerId(): string {
 export async function getCodexServers(): Promise<CodexServerDirectory> {
   try {
     const payload = await fetchCodexServers()
-    return normalizeServerEntries(payload)
+    const normalized = normalizeServerEntries(payload)
+    serverInfoById.clear()
+    for (const server of normalized.servers) {
+      if (server.id.length === 0) continue
+      serverInfoById.set(server.id, server)
+    }
+    return normalized
   } catch (error) {
     throw normalizeCodexApiError(error, 'Failed to load servers', 'servers/list')
+  }
+}
+
+export function setRelayE2eePassphrase(serverId: string, passphrase: string): void {
+  const normalizedServerId = serverId.trim()
+  if (!normalizedServerId) return
+  if (passphrase.trim().length > 0) {
+    relayE2eePassphraseByServerId.set(normalizedServerId, passphrase)
+  } else {
+    relayE2eePassphraseByServerId.delete(normalizedServerId)
   }
 }
 
