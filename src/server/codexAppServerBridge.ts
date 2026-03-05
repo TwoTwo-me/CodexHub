@@ -66,6 +66,12 @@ type CodexRelayServerConfig = {
   agentId: string
   protocol: string
   requestTimeoutMs: number
+  e2ee?: CodexRelayE2eeConfig
+}
+
+type CodexRelayE2eeConfig = {
+  keyId: string
+  algorithm: 'aes-256-gcm'
 }
 
 type CodexServerTransport = 'local' | 'relay'
@@ -419,6 +425,8 @@ const MAX_SERVER_ID_LENGTH = 64
 const SERVER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const RELAY_AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const LEGACY_RELAY_AGENT_ID_PATTERN = /^agent:([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/u
+const RELAY_E2EE_KEY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+const RELAY_E2EE_ALGORITHM = 'aes-256-gcm' as const
 const DEFAULT_RELAY_PROTOCOL = 'relay-http-v1'
 const MIN_RELAY_TIMEOUT_MS = 5_000
 const MAX_RELAY_TIMEOUT_MS = 300_000
@@ -487,6 +495,35 @@ function clampRelayTimeoutMs(value: unknown): number {
   return normalized
 }
 
+function normalizeRelayE2eeConfig(value: unknown): CodexRelayE2eeConfig | undefined | null {
+  if (value === undefined || value === null) {
+    return undefined
+  }
+
+  const record = asRecord(value)
+  if (!record) return null
+
+  const enabled = record.enabled !== false
+  if (!enabled) {
+    return undefined
+  }
+
+  const keyId = typeof record.keyId === 'string' ? record.keyId.trim() : ''
+  if (!keyId || !RELAY_E2EE_KEY_ID_PATTERN.test(keyId)) {
+    return null
+  }
+
+  const algorithm = typeof record.algorithm === 'string' ? record.algorithm.trim().toLowerCase() : ''
+  if (algorithm && algorithm !== RELAY_E2EE_ALGORITHM) {
+    return null
+  }
+
+  return {
+    keyId,
+    algorithm: RELAY_E2EE_ALGORITHM,
+  }
+}
+
 function normalizeRelayServerConfig(value: unknown): CodexRelayServerConfig | null {
   const record = asRecord(value)
   if (!record) return null
@@ -501,10 +538,16 @@ function normalizeRelayServerConfig(value: unknown): CodexRelayServerConfig | nu
     : DEFAULT_RELAY_PROTOCOL
 
   const requestTimeoutMs = clampRelayTimeoutMs(record.requestTimeoutMs)
+  const e2ee = normalizeRelayE2eeConfig(record.e2ee)
+  if (record.e2ee !== undefined && e2ee === null) {
+    return null
+  }
+
   return {
     agentId,
     protocol,
     requestTimeoutMs,
+    ...(e2ee ? { e2ee } : {}),
   }
 }
 

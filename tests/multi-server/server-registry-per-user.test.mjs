@@ -131,6 +131,27 @@ test('server registry accepts relay transport metadata and validates relay paylo
     )
     assert.equal(invalidRelayCreate.status, 400)
 
+    const invalidRelayE2eeCreate = await postJson(
+      `${baseUrl}/codex-api/servers`,
+      {
+        id: 'relay-invalid-e2ee',
+        name: 'Relay Invalid E2EE',
+        transport: 'relay',
+        relay: {
+          agentId: 'edge-invalid',
+          protocol: 'relay-http-v1',
+          requestTimeoutMs: 90_000,
+          e2ee: {
+            enabled: true,
+            keyId: 'bad key',
+            algorithm: 'aes-256-gcm',
+          },
+        },
+      },
+      { Cookie: alphaCookie },
+    )
+    assert.equal(invalidRelayE2eeCreate.status, 400)
+
     const relayCreate = await postJson(
       `${baseUrl}/codex-api/servers`,
       {
@@ -141,6 +162,11 @@ test('server registry accepts relay transport metadata and validates relay paylo
           agentId: 'edge-1',
           protocol: 'relay-http-v1',
           requestTimeoutMs: 90_000,
+          e2ee: {
+            enabled: true,
+            keyId: 'relay-edge-key-1',
+            algorithm: 'aes-256-gcm',
+          },
         },
       },
       { Cookie: alphaCookie },
@@ -151,6 +177,8 @@ test('server registry accepts relay transport metadata and validates relay paylo
     assert.equal(relayCreateBody.data.server.relay.agentId, 'edge-1')
     assert.equal(relayCreateBody.data.server.relay.protocol, 'relay-http-v1')
     assert.equal(relayCreateBody.data.server.relay.requestTimeoutMs, 90_000)
+    assert.equal(relayCreateBody.data.server.relay.e2ee.keyId, 'relay-edge-key-1')
+    assert.equal(relayCreateBody.data.server.relay.e2ee.algorithm, 'aes-256-gcm')
 
     const legacyRelayCreate = await postJson(
       `${baseUrl}/codex-api/servers`,
@@ -180,10 +208,13 @@ test('server registry accepts relay transport metadata and validates relay paylo
     assert.ok(relayServer)
     assert.equal(relayServer.transport, 'relay')
     assert.equal(relayServer.relay.agentId, 'edge-1')
+    assert.equal(relayServer.relay.e2ee.keyId, 'relay-edge-key-1')
+    assert.equal(relayServer.relay.e2ee.algorithm, 'aes-256-gcm')
 
     const legacyRelayServer = alphaRegistry.data.servers.find((server) => server.id === 'relay-edge-legacy')
     assert.ok(legacyRelayServer)
     assert.equal(legacyRelayServer.transport, 'relay')
     assert.equal(legacyRelayServer.relay.agentId, 'edge-legacy')
+    assert.equal(legacyRelayServer.relay.e2ee, undefined)
   })
 })

@@ -5,6 +5,8 @@ export const SESSION_COOKIE_NAME = 'codex_web_local_token'
 const SERVER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
 const RELAY_AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
 const LEGACY_RELAY_AGENT_ID_PATTERN = /^agent:([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/u
+const RELAY_E2EE_KEY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
+const RELAY_E2EE_ALGORITHM = 'aes-256-gcm'
 const DEFAULT_SERVER_ID = 'default'
 const DEFAULT_SERVER_NAME = 'Default server'
 const DEFAULT_RELAY_PROTOCOL = 'relay-http-v1'
@@ -121,6 +123,30 @@ function normalizeRelayAgentId(value) {
   return legacyMatch?.[1] ?? ''
 }
 
+function normalizeRelayE2eeConfig(value) {
+  if (value === undefined || value === null) return undefined
+  const record = asRecord(value)
+  if (!record) return null
+
+  const enabled = record.enabled !== false
+  if (!enabled) return undefined
+
+  const keyId = typeof record.keyId === 'string' ? record.keyId.trim() : ''
+  if (!keyId || !RELAY_E2EE_KEY_ID_PATTERN.test(keyId)) {
+    return null
+  }
+
+  const algorithm = typeof record.algorithm === 'string' ? record.algorithm.trim().toLowerCase() : ''
+  if (algorithm && algorithm !== RELAY_E2EE_ALGORITHM) {
+    return null
+  }
+
+  return {
+    keyId,
+    algorithm: RELAY_E2EE_ALGORITHM,
+  }
+}
+
 function normalizeRelayConfig(value) {
   const record = asRecord(value)
   if (!record) return null
@@ -134,11 +160,16 @@ function normalizeRelayConfig(value) {
     ? record.protocol.trim()
     : DEFAULT_RELAY_PROTOCOL
   const requestTimeoutMs = clampTimeoutMs(Number(record.requestTimeoutMs))
+  const e2ee = normalizeRelayE2eeConfig(record.e2ee)
+  if (record.e2ee !== undefined && e2ee === null) {
+    return null
+  }
 
   return {
     agentId,
     protocol,
     requestTimeoutMs,
+    ...(e2ee ? { e2ee } : {}),
   }
 }
 
