@@ -4,12 +4,18 @@ import { CodexApiError, extractErrorMessage } from './codexErrors'
 type RpcRequestBody = {
   method: string
   params?: unknown
+  serverId?: string
+}
+
+type ScopedRequestOptions = {
+  serverId?: string
 }
 
 export type RpcNotification = {
   method: string
   params: unknown
   atIso: string
+  serverId: string
 }
 
 type ServerRequestReplyBody = {
@@ -21,18 +27,36 @@ type ServerRequestReplyBody = {
   }
 }
 
+function normalizeServerId(serverId?: string): string {
+  return typeof serverId === 'string' ? serverId.trim() : ''
+}
+
+function withServerScope(path: string, serverId?: string): string {
+  const normalized = normalizeServerId(serverId)
+  if (!normalized) return path
+
+  const url = new URL(path, 'http://localhost')
+  url.searchParams.set('serverId', normalized)
+  return `${url.pathname}${url.search}`
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null
 }
 
-export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
-  const body: RpcRequestBody = { method, params: params ?? null }
+export async function rpcCall<T>(method: string, params?: unknown, options: ScopedRequestOptions = {}): Promise<T> {
+  const scopedServerId = normalizeServerId(options.serverId)
+  const body: RpcRequestBody = {
+    method,
+    params: params ?? null,
+    ...(scopedServerId ? { serverId: scopedServerId } : {}),
+  }
 
   let response: Response
   try {
-    response = await fetch('/codex-api/rpc', {
+    response = await fetch(withServerScope('/codex-api/rpc', scopedServerId), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -75,8 +99,9 @@ export async function rpcCall<T>(method: string, params?: unknown): Promise<T> {
   return envelope.result
 }
 
-export async function fetchRpcMethodCatalog(): Promise<string[]> {
-  const response = await fetch('/codex-api/meta/methods')
+export async function fetchRpcMethodCatalog(options: ScopedRequestOptions = {}): Promise<string[]> {
+  const scopedServerId = normalizeServerId(options.serverId)
+  const response = await fetch(withServerScope('/codex-api/meta/methods', scopedServerId))
 
   let payload: unknown = null
   try {
@@ -100,8 +125,9 @@ export async function fetchRpcMethodCatalog(): Promise<string[]> {
   return Array.isArray(catalog.data) ? catalog.data : []
 }
 
-export async function fetchRpcNotificationCatalog(): Promise<string[]> {
-  const response = await fetch('/codex-api/meta/notifications')
+export async function fetchRpcNotificationCatalog(options: ScopedRequestOptions = {}): Promise<string[]> {
+  const scopedServerId = normalizeServerId(options.serverId)
+  const response = await fetch(withServerScope('/codex-api/meta/notifications', scopedServerId))
 
   let payload: unknown = null
   try {
@@ -125,7 +151,7 @@ export async function fetchRpcNotificationCatalog(): Promise<string[]> {
   return Array.isArray(catalog.data) ? catalog.data : []
 }
 
-function toNotification(value: unknown): RpcNotification | null {
+function toNotification(value: unknown, fallbackServerId = ''): RpcNotification | null {
   const record = asRecord(value)
   if (!record) return null
   if (typeof record.method !== 'string' || record.method.length === 0) return null
@@ -138,20 +164,30 @@ function toNotification(value: unknown): RpcNotification | null {
     method: record.method,
     params: record.params ?? null,
     atIso,
+    serverId:
+      (typeof record.serverId === 'string' && record.serverId.length > 0
+        ? record.serverId
+        : typeof record.server_id === 'string' && record.server_id.length > 0
+          ? record.server_id
+          : fallbackServerId) || '',
   }
 }
 
-export function subscribeRpcNotifications(onNotification: (value: RpcNotification) => void): () => void {
+export function subscribeRpcNotifications(
+  onNotification: (value: RpcNotification) => void,
+  options: ScopedRequestOptions = {},
+): () => void {
   if (typeof window === 'undefined' || typeof EventSource === 'undefined') {
     return () => {}
   }
 
-  const source = new EventSource('/codex-api/events')
+  const scopedServerId = normalizeServerId(options.serverId)
+  const source = new EventSource(withServerScope('/codex-api/events', scopedServerId))
 
   source.onmessage = (event) => {
     try {
       const parsed = JSON.parse(event.data) as unknown
-      const notification = toNotification(parsed)
+      const notification = toNotification(parsed, scopedServerId)
       if (notification) {
         onNotification(notification)
       }
@@ -165,15 +201,18 @@ export function subscribeRpcNotifications(onNotification: (value: RpcNotificatio
   }
 }
 
-export async function respondServerRequest(body: ServerRequestReplyBody): Promise<void> {
+export async function respondServerRequest(body: ServerRequestReplyBody, options: ScopedRequestOptions = {}): Promise<void> {
+  const scopedServerId = normalizeServerId(options.serverId)
+  const requestBody = scopedServerId ? { ...body, serverId: scopedServerId } : body
+
   let response: Response
   try {
-    response = await fetch('/codex-api/server-requests/respond', {
+    response = await fetch(withServerScope('/codex-api/server-requests/respond', scopedServerId), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestBody),
     })
   } catch (error) {
     throw new CodexApiError(
@@ -201,8 +240,9 @@ export async function respondServerRequest(body: ServerRequestReplyBody): Promis
   }
 }
 
-export async function fetchPendingServerRequests(): Promise<unknown[]> {
-  const response = await fetch('/codex-api/server-requests/pending')
+export async function fetchPendingServerRequests(options: ScopedRequestOptions = {}): Promise<unknown[]> {
+  const scopedServerId = normalizeServerId(options.serverId)
+  const response = await fetch(withServerScope('/codex-api/server-requests/pending', scopedServerId))
 
   let payload: unknown = null
   try {
@@ -225,4 +265,29 @@ export async function fetchPendingServerRequests(): Promise<unknown[]> {
   const record = asRecord(payload)
   const data = record?.data
   return Array.isArray(data) ? data : []
+}
+
+export async function fetchCodexServers(): Promise<unknown> {
+  const response = await fetch('/codex-api/servers')
+
+  let payload: unknown = null
+  try {
+    payload = await response.json()
+  } catch {
+    payload = null
+  }
+
+  if (!response.ok) {
+    throw new CodexApiError(
+      extractErrorMessage(payload, `Server list failed with HTTP ${response.status}`),
+      {
+        code: 'http_error',
+        method: 'servers',
+        status: response.status,
+      },
+    )
+  }
+
+  const record = asRecord(payload)
+  return record?.data ?? payload
 }

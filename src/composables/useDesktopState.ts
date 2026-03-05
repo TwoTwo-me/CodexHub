@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 import {
   archiveThread,
+  getCodexServers,
   getAvailableModelIds,
   getCurrentModelConfig,
   getPendingServerRequests,
@@ -19,6 +20,8 @@ import {
   startThread,
   subscribeCodexNotifications,
   startThreadTurn,
+  setActiveServerId as setGatewayActiveServerId,
+  type CodexServerInfo,
   type RpcNotification,
   type SkillInfo,
 } from '../api/codexGateway'
@@ -41,6 +44,7 @@ function flattenThreads(groups: UiProjectGroup[]): UiThread[] {
 const READ_STATE_STORAGE_KEY = 'codex-web-local.thread-read-state.v1'
 const SCROLL_STATE_STORAGE_KEY = 'codex-web-local.thread-scroll-state.v1'
 const SELECTED_THREAD_STORAGE_KEY = 'codex-web-local.selected-thread-id.v1'
+const SELECTED_SERVER_STORAGE_KEY = 'codex-web-local.selected-server-id.v1'
 const PROJECT_ORDER_STORAGE_KEY = 'codex-web-local.project-order.v1'
 const PROJECT_DISPLAY_NAME_STORAGE_KEY = 'codex-web-local.project-display-name.v1'
 const AUTO_REFRESH_ENABLED_STORAGE_KEY = 'codex-web-local.auto-refresh-enabled.v1'
@@ -48,6 +52,12 @@ const EVENT_SYNC_DEBOUNCE_MS = 220
 const AUTO_REFRESH_INTERVAL_MS = 4000
 const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
 const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
+
+const FALLBACK_SERVER_OPTION: CodexServerInfo = {
+  id: '',
+  label: 'Default server',
+  description: '',
+}
 
 function loadReadStateMap(): Record<string, string> {
   if (typeof window === 'undefined') return {}
@@ -144,6 +154,21 @@ function saveSelectedThreadId(threadId: string): void {
     return
   }
   window.localStorage.setItem(SELECTED_THREAD_STORAGE_KEY, threadId)
+}
+
+function loadSelectedServerId(): string {
+  if (typeof window === 'undefined') return ''
+  const raw = window.localStorage.getItem(SELECTED_SERVER_STORAGE_KEY)
+  return raw ?? ''
+}
+
+function saveSelectedServerId(serverId: string): void {
+  if (typeof window === 'undefined') return
+  if (!serverId) {
+    window.localStorage.removeItem(SELECTED_SERVER_STORAGE_KEY)
+    return
+  }
+  window.localStorage.setItem(SELECTED_SERVER_STORAGE_KEY, serverId)
 }
 
 function loadProjectOrder(): string[] {
@@ -612,10 +637,36 @@ function toOptimisticThreadTitle(message: string): string {
   return firstLine.slice(0, 80)
 }
 
+function normalizeServerList(value: CodexServerInfo[]): CodexServerInfo[] {
+  const next: CodexServerInfo[] = []
+  const seen = new Set<string>()
+  for (const row of value) {
+    const id = row.id.trim()
+    const label = row.label.trim() || id || FALLBACK_SERVER_OPTION.label
+    const description = row.description.trim()
+    const dedupeKey = id || label
+    if (seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+    next.push({ id, label, description })
+  }
+  return next
+}
+
+function chooseServerId(availableServers: CodexServerInfo[], preferredServerId: string): string {
+  const preferred = preferredServerId.trim()
+  if (preferred && availableServers.some((server) => server.id === preferred)) {
+    return preferred
+  }
+  return availableServers[0]?.id ?? ''
+}
+
 export function useDesktopState() {
   const projectGroups = ref<UiProjectGroup[]>([])
   const sourceGroups = ref<UiProjectGroup[]>([])
   const selectedThreadId = ref(loadSelectedThreadId())
+  const availableServers = ref<CodexServerInfo[]>([FALLBACK_SERVER_OPTION])
+  const selectedServerId = ref(loadSelectedServerId())
+  setGatewayActiveServerId(selectedServerId.value)
   const persistedMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
   const liveAgentMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
   const liveReasoningTextByThreadId = ref<Record<string, string>>({})
@@ -666,6 +717,11 @@ export function useDesktopState() {
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
 
   const allThreads = computed(() => flattenThreads(projectGroups.value))
+  const selectedServer = computed<CodexServerInfo>(() =>
+    availableServers.value.find((server) => server.id === selectedServerId.value)
+      ?? availableServers.value[0]
+      ?? FALLBACK_SERVER_OPTION,
+  )
   const selectedThread = computed(() =>
     allThreads.value.find((thread) => thread.id === selectedThreadId.value) ?? null,
   )
@@ -719,6 +775,71 @@ export function useDesktopState() {
     saveSelectedThreadId(nextThreadId)
     activeReasoningItemId = ''
     shouldAutoScrollOnNextAgentEvent = false
+  }
+
+  function setSelectedServerIdValue(nextServerId: string): boolean {
+    const normalizedServerId = nextServerId.trim()
+    const changed = selectedServerId.value !== normalizedServerId
+    if (changed) {
+      selectedServerId.value = normalizedServerId
+      saveSelectedServerId(normalizedServerId)
+    }
+    setGatewayActiveServerId(normalizedServerId)
+    return changed
+  }
+
+  function resetServerScopedUiState(): void {
+    sourceGroups.value = []
+    projectGroups.value = []
+    setSelectedThreadId('')
+    loadedMessagesByThreadId.value = {}
+    loadedVersionByThreadId.value = {}
+    resumedThreadById.value = {}
+    pendingServerRequestsByThreadId.value = {}
+    eventUnreadByThreadId.value = {}
+    inProgressById.value = {}
+    pendingTurnStartsById.clear()
+    pendingThreadMessageRefresh.clear()
+    pendingThreadsRefresh = false
+    threadTitleById.value = {}
+    hasLoadedThreads.value = false
+  }
+
+  async function refreshServers(): Promise<void> {
+    let nextServers = normalizeServerList(availableServers.value)
+    try {
+      nextServers = normalizeServerList(await getCodexServers())
+    } catch {
+      // Keep the last known list when the server directory endpoint is temporarily unavailable.
+    }
+
+    if (nextServers.length === 0) {
+      nextServers = [{ ...FALLBACK_SERVER_OPTION }]
+    }
+
+    availableServers.value = nextServers
+
+    const preferredServerId = selectedServerId.value || loadSelectedServerId()
+    const nextServerId = chooseServerId(nextServers, preferredServerId)
+    setSelectedServerIdValue(nextServerId)
+  }
+
+  function isNotificationInActiveServerScope(notification: RpcNotification): boolean {
+    const activeServerId = selectedServerId.value.trim()
+    const notificationServerId = notification.serverId.trim()
+    if (!activeServerId || !notificationServerId) return true
+    return activeServerId === notificationServerId
+  }
+
+  async function selectServer(serverId: string): Promise<void> {
+    const nextServerId = chooseServerId(availableServers.value, serverId)
+    const changed = setSelectedServerIdValue(nextServerId)
+    if (!changed) return
+
+    stopPolling()
+    resetServerScopedUiState()
+    await refreshAll()
+    startPolling()
   }
 
   function setSelectedModelId(modelId: string): void {
@@ -1918,6 +2039,7 @@ export function useDesktopState() {
     error.value = ''
 
     try {
+      await refreshServers()
       await loadThreads()
       await Promise.all([
         refreshModelPreferences(),
@@ -2400,11 +2522,13 @@ export function useDesktopState() {
     if (typeof window === 'undefined') return
 
     if (stopNotificationStream) return
+    setGatewayActiveServerId(selectedServerId.value)
     if (isAutoRefreshEnabled.value) {
       startAutoRefreshTimer()
     }
     void loadPendingServerRequestsFromBridge()
     stopNotificationStream = subscribeCodexNotifications((notification) => {
+      if (!isNotificationInActiveServerScope(notification)) return
       applyRealtimeUpdates(notification)
       queueEventDrivenSync(notification)
     })
@@ -2413,12 +2537,23 @@ export function useDesktopState() {
   async function loadPendingServerRequestsFromBridge(): Promise<void> {
     try {
       const rows = await getPendingServerRequests()
+      const nextByThreadId: Record<string, UiServerRequest[]> = {}
       for (const row of rows) {
         const request = normalizeServerRequest(row)
         if (request) {
-          upsertPendingServerRequest(request)
+          const threadId = request.threadId || GLOBAL_SERVER_REQUEST_SCOPE
+          if (!nextByThreadId[threadId]) {
+            nextByThreadId[threadId] = []
+          }
+          nextByThreadId[threadId].push(request)
         }
       }
+
+      for (const [threadId, requests] of Object.entries(nextByThreadId)) {
+        nextByThreadId[threadId] = requests.sort((first, second) => first.receivedAtIso.localeCompare(second.receivedAtIso))
+      }
+
+      pendingServerRequestsByThreadId.value = Object.keys(nextByThreadId).length > 0 ? nextByThreadId : {}
     } catch {
       // Keep UI usable when pending request endpoint is temporarily unavailable.
     }
@@ -2537,6 +2672,10 @@ export function useDesktopState() {
   }
 
   return {
+    availableServers,
+    selectedServer,
+    selectedServerId,
+    selectServer,
     projectGroups,
     projectDisplayNameById,
     selectedThread,

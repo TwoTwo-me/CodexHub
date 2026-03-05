@@ -83,8 +83,15 @@
             />
           </template>
           <template #meta>
-            <CwdPicker v-if="isHomeRoute" v-model="newThreadCwd" />
-            <p v-else-if="headerCwdDisplay" class="header-cwd-readonly">{{ headerCwdDisplay }}</p>
+            <div class="header-meta-stack">
+              <ServerPicker
+                :model-value="selectedServerId"
+                :options="availableServers"
+                @update:model-value="onSelectServer"
+              />
+              <CwdPicker v-if="isHomeRoute" v-model="newThreadCwd" />
+              <p v-else-if="headerCwdDisplay" class="header-cwd-readonly">{{ headerCwdDisplay }}</p>
+            </div>
           </template>
         </ContentHeader>
 
@@ -156,6 +163,7 @@ import ThreadConversation from './components/content/ThreadConversation.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
 import CwdPicker from './components/content/CwdPicker.vue'
+import ServerPicker from './components/content/ServerPicker.vue'
 import SkillsHub from './components/content/SkillsHub.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
@@ -168,6 +176,9 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 
 const {
+  availableServers,
+  selectedServerId,
+  selectServer,
   projectGroups,
   projectDisplayNameById,
   selectedThread,
@@ -346,6 +357,10 @@ function onRespondServerRequest(payload: { id: number; result?: unknown; error?:
 
 function onToggleAutoRefreshTimer(): void {
   toggleAutoRefreshTimer()
+}
+
+function onSelectServer(serverId: string): void {
+  void selectServer(serverId)
 }
 
 function setSidebarCollapsed(nextValue: boolean): void {
@@ -566,6 +581,10 @@ async function submitFirstMessageForNewThread(
 
 .header-cwd-readonly {
   @apply m-0 max-w-full truncate text-xs text-zinc-500;
+}
+
+.header-meta-stack {
+  @apply min-w-0 flex flex-col gap-1;
 }
 
 .content-body {

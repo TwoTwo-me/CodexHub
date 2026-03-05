@@ -1,4 +1,5 @@
 import {
+  fetchCodexServers,
   fetchRpcMethodCatalog,
   fetchRpcNotificationCatalog,
   fetchPendingServerRequests,
@@ -29,9 +30,80 @@ export type WorkspaceRootsState = {
   active: string[]
 }
 
+export type CodexServerInfo = {
+  id: string
+  label: string
+  description: string
+}
+
+let activeServerId = ''
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeServerEntries(payload: unknown): CodexServerInfo[] {
+  const root = asRecord(payload)
+  const rows = Array.isArray(payload)
+    ? payload
+    : Array.isArray(root?.servers)
+      ? root.servers
+      : []
+
+  const servers: CodexServerInfo[] = []
+  const seen = new Set<string>()
+
+  for (const row of rows) {
+    const record = asRecord(row)
+    if (!record) continue
+
+    const id = readString(record.id) || readString(record.serverId) || readString(record.server_id)
+    const label = readString(record.label) || readString(record.name) || readString(record.title) || id
+    const description = readString(record.description) || readString(record.details)
+    const dedupeKey = id || label
+    if (!dedupeKey || seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+
+    servers.push({
+      id,
+      label: label || 'Default server',
+      description,
+    })
+  }
+
+  return servers
+}
+
+function scopedServerOptions(): { serverId?: string } {
+  return activeServerId ? { serverId: activeServerId } : {}
+}
+
+export function setActiveServerId(serverId: string): void {
+  activeServerId = serverId.trim()
+}
+
+export function getActiveServerId(): string {
+  return activeServerId
+}
+
+export async function getCodexServers(): Promise<CodexServerInfo[]> {
+  try {
+    const payload = await fetchCodexServers()
+    return normalizeServerEntries(payload)
+  } catch (error) {
+    throw normalizeCodexApiError(error, 'Failed to load servers', 'servers/list')
+  }
+}
+
 async function callRpc<T>(method: string, params?: unknown): Promise<T> {
   try {
-    return await rpcCall<T>(method, params)
+    return await rpcCall<T>(method, params, scopedServerOptions())
   } catch (error) {
     throw normalizeCodexApiError(error, `RPC ${method} failed`, method)
   }
@@ -78,15 +150,15 @@ export async function getThreadMessages(threadId: string): Promise<UiMessage[]> 
 }
 
 export async function getMethodCatalog(): Promise<string[]> {
-  return fetchRpcMethodCatalog()
+  return fetchRpcMethodCatalog(scopedServerOptions())
 }
 
 export async function getNotificationCatalog(): Promise<string[]> {
-  return fetchRpcNotificationCatalog()
+  return fetchRpcNotificationCatalog(scopedServerOptions())
 }
 
 export function subscribeCodexNotifications(onNotification: (value: RpcNotification) => void): () => void {
-  return subscribeRpcNotifications(onNotification)
+  return subscribeRpcNotifications(onNotification, scopedServerOptions())
 }
 
 export type { RpcNotification }
@@ -98,11 +170,11 @@ export async function replyToServerRequest(
   await respondServerRequest({
     id,
     ...payload,
-  })
+  }, scopedServerOptions())
 }
 
 export async function getPendingServerRequests(): Promise<unknown[]> {
-  return fetchPendingServerRequests()
+  return fetchPendingServerRequests(scopedServerOptions())
 }
 
 export async function resumeThread(threadId: string): Promise<void> {
