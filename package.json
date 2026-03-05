@@ -36,7 +36,12 @@
     "build:cli": "tsup",
     "build": "npm run build:frontend && npm run build:cli",
     "preview": "vite preview",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "test:multi-server": "node --test tests/multi-server",
+    "docker:multi-server:prepare-auth": "bash scripts/docker/prepare-codex-auth.sh",
+    "docker:multi-server:up": "bash scripts/docker/multi-server-up.sh",
+    "docker:multi-server:smoke": "bash scripts/docker/multi-server-smoke.sh",
+    "docker:multi-server:down": "bash scripts/docker/multi-server-down.sh"
   },
   "dependencies": {
     "commander": "^13.1.0",

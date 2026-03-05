@@ -1,0 +1,17 @@
+FROM node:20-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates tini \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN npm install --global @openai/codex@latest \
+  && npm cache clean --force
+
+ENV CODEX_HOME=/root/.codex
+
+RUN mkdir -p /root/.codex
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["codex", "--version"]
