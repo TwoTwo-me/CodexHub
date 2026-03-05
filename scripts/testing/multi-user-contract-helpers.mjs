@@ -3,7 +3,8 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 export const SESSION_COOKIE_NAME = 'codex_web_local_token'
 
 const SERVER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
-const RELAY_AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/u
+const RELAY_AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u
+const LEGACY_RELAY_AGENT_ID_PATTERN = /^agent:([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/u
 const DEFAULT_SERVER_ID = 'default'
 const DEFAULT_SERVER_NAME = 'Default server'
 const DEFAULT_RELAY_PROTOCOL = 'relay-http-v1'
@@ -112,12 +113,20 @@ function normalizeServerTransport(value) {
   return value === 'relay' ? 'relay' : 'local'
 }
 
+function normalizeRelayAgentId(value) {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return ''
+  if (RELAY_AGENT_ID_PATTERN.test(raw)) return raw
+  const legacyMatch = LEGACY_RELAY_AGENT_ID_PATTERN.exec(raw)
+  return legacyMatch?.[1] ?? ''
+}
+
 function normalizeRelayConfig(value) {
   const record = asRecord(value)
   if (!record) return null
 
-  const agentId = typeof record.agentId === 'string' ? record.agentId.trim() : ''
-  if (!agentId || !RELAY_AGENT_ID_PATTERN.test(agentId)) {
+  const agentId = normalizeRelayAgentId(record.agentId)
+  if (!agentId) {
     return null
   }
 

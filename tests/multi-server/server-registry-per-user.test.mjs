@@ -138,7 +138,7 @@ test('server registry accepts relay transport metadata and validates relay paylo
         name: 'Relay Edge',
         transport: 'relay',
         relay: {
-          agentId: 'agent:edge-1',
+          agentId: 'edge-1',
           protocol: 'relay-http-v1',
           requestTimeoutMs: 90_000,
         },
@@ -148,9 +148,28 @@ test('server registry accepts relay transport metadata and validates relay paylo
     assert.equal(relayCreate.status, 201)
     const relayCreateBody = await relayCreate.json()
     assert.equal(relayCreateBody.data.server.transport, 'relay')
-    assert.equal(relayCreateBody.data.server.relay.agentId, 'agent:edge-1')
+    assert.equal(relayCreateBody.data.server.relay.agentId, 'edge-1')
     assert.equal(relayCreateBody.data.server.relay.protocol, 'relay-http-v1')
     assert.equal(relayCreateBody.data.server.relay.requestTimeoutMs, 90_000)
+
+    const legacyRelayCreate = await postJson(
+      `${baseUrl}/codex-api/servers`,
+      {
+        id: 'relay-edge-legacy',
+        name: 'Relay Edge Legacy',
+        transport: 'relay',
+        relay: {
+          agentId: 'agent:edge-legacy',
+          protocol: 'relay-http-v1',
+          requestTimeoutMs: 90_000,
+        },
+      },
+      { Cookie: alphaCookie },
+    )
+    assert.equal(legacyRelayCreate.status, 201)
+    const legacyRelayCreateBody = await legacyRelayCreate.json()
+    assert.equal(legacyRelayCreateBody.data.server.transport, 'relay')
+    assert.equal(legacyRelayCreateBody.data.server.relay.agentId, 'edge-legacy')
 
     const alphaRegistryResponse = await fetch(`${baseUrl}/codex-api/servers`, {
       headers: { Cookie: alphaCookie },
@@ -160,6 +179,11 @@ test('server registry accepts relay transport metadata and validates relay paylo
     const relayServer = alphaRegistry.data.servers.find((server) => server.id === 'relay-edge-1')
     assert.ok(relayServer)
     assert.equal(relayServer.transport, 'relay')
-    assert.equal(relayServer.relay.agentId, 'agent:edge-1')
+    assert.equal(relayServer.relay.agentId, 'edge-1')
+
+    const legacyRelayServer = alphaRegistry.data.servers.find((server) => server.id === 'relay-edge-legacy')
+    assert.ok(legacyRelayServer)
+    assert.equal(legacyRelayServer.transport, 'relay')
+    assert.equal(legacyRelayServer.relay.agentId, 'edge-legacy')
   })
 })

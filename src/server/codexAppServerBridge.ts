@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm, mkdir, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { request as httpsRequest } from 'node:https'
@@ -9,6 +10,13 @@ import { writeFile } from 'node:fs/promises'
 import { getRequestAuthScopeKey, getRequestAuthenticatedUser } from './requestAuthContext.js'
 import { OutboundRelayHub, RelayHubError } from './relay/relayHub.js'
 import { listUsers } from './userStore.js'
+import {
+  RELAY_CHANNEL_ID_HEADER,
+  RELAY_HUB_CHANNEL,
+  RELAY_SERVER_ID_HEADER,
+  isRelayChannelId,
+  type RelayChannelId,
+} from '../types/relayProtocol.js'
 
 type JsonRpcCall = {
   jsonrpc: '2.0'
@@ -409,18 +417,30 @@ const DEFAULT_SERVER_ID = 'default'
 const DEFAULT_SERVER_NAME = 'Default server'
 const MAX_SERVER_ID_LENGTH = 64
 const SERVER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
-const RELAY_AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/
+const RELAY_AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+const LEGACY_RELAY_AGENT_ID_PATTERN = /^agent:([A-Za-z0-9][A-Za-z0-9._-]{0,63})$/u
 const DEFAULT_RELAY_PROTOCOL = 'relay-http-v1'
 const MIN_RELAY_TIMEOUT_MS = 5_000
 const MAX_RELAY_TIMEOUT_MS = 300_000
 const DEFAULT_RELAY_TIMEOUT_MS = 60_000
 const MAX_JSON_BODY_BYTES = 1024 * 1024
 const MAX_TRANSCRIBE_BODY_BYTES = 25 * 1024 * 1024
+const RELAY_AGENT_RATE_LIMIT_WINDOW_MS = 60_000
+const RELAY_AGENT_RATE_LIMIT_BLOCK_MS = 60_000
+const RELAY_AGENT_RATE_LIMIT_MAX_PER_IP = 4_000
+const RELAY_AGENT_RATE_LIMIT_MAX_PER_CLIENT_KEY = 480
+const RELAY_AGENT_RATE_LIMIT_MAX_ENTRIES = 4096
 const cachedServerRegistryStateByScope = new Map<string, ServerRegistryState>()
 
 type ServerRegistryScope = {
   cacheKey: string
   userId: string | null
+}
+
+type RelayEndpointRateLimitRecord = {
+  requests: number
+  windowStartedAtMs: number
+  blockedUntilMs: number
 }
 
 function cloneServerRecord(record: CodexServerRecord): CodexServerRecord {
@@ -445,6 +465,15 @@ function isValidRelayAgentId(value: string): boolean {
   return RELAY_AGENT_ID_PATTERN.test(value)
 }
 
+function normalizeRelayAgentId(value: unknown): string {
+  const rawValue = typeof value === 'string' ? value.trim() : ''
+  if (!rawValue) return ''
+  if (isValidRelayAgentId(rawValue)) return rawValue
+
+  const legacyMatch = LEGACY_RELAY_AGENT_ID_PATTERN.exec(rawValue)
+  return legacyMatch?.[1] ?? ''
+}
+
 function normalizeServerTransport(value: unknown): CodexServerTransport {
   return value === 'relay' ? 'relay' : 'local'
 }
@@ -462,8 +491,8 @@ function normalizeRelayServerConfig(value: unknown): CodexRelayServerConfig | nu
   const record = asRecord(value)
   if (!record) return null
 
-  const agentId = typeof record.agentId === 'string' ? record.agentId.trim() : ''
-  if (!agentId || !isValidRelayAgentId(agentId)) {
+  const agentId = normalizeRelayAgentId(record.agentId)
+  if (!agentId) {
     return null
   }
 
@@ -712,11 +741,185 @@ function getSingleHeaderValue(header: string | string[] | undefined): string {
 }
 
 export function getRequestedServerId(req: IncomingMessage, url: URL): string | null {
-  const headerServerId = getSingleHeaderValue(req.headers['x-codex-server-id'])
+  const headerServerId = getSingleHeaderValue(req.headers[RELAY_SERVER_ID_HEADER])
   if (headerServerId.length > 0) return headerServerId
 
   const queryServerId = url.searchParams.get('serverId')?.trim() ?? ''
   return queryServerId.length > 0 ? queryServerId : null
+}
+
+function parseRequestedRelayChannelId(rawValue: string): RelayChannelId | null {
+  const trimmed = rawValue.trim()
+  if (!trimmed) return null
+  return isRelayChannelId(trimmed) ? trimmed : null
+}
+
+export function getRequestedChannelId(req: IncomingMessage, url: URL): RelayChannelId | null {
+  const headerChannelId = getSingleHeaderValue(req.headers[RELAY_CHANNEL_ID_HEADER])
+  if (headerChannelId.length > 0) {
+    return parseRequestedRelayChannelId(headerChannelId)
+  }
+
+  const queryChannelId = url.searchParams.get('channelId')
+  if (queryChannelId && queryChannelId.trim().length > 0) {
+    return parseRequestedRelayChannelId(queryChannelId)
+  }
+
+  return RELAY_HUB_CHANNEL
+}
+
+function getRemoteAddress(req: IncomingMessage): string {
+  const remoteAddress = req.socket.remoteAddress
+  if (typeof remoteAddress === 'string' && remoteAddress.trim().length > 0) {
+    return remoteAddress.trim()
+  }
+  return 'unknown'
+}
+
+function getTrustedClientAddress(req: IncomingMessage): string {
+  const remoteAddress = getRemoteAddress(req)
+  if (!isLoopbackRequest(req)) {
+    return remoteAddress
+  }
+
+  const forwardedFor = getSingleHeaderValue(req.headers['x-forwarded-for'])
+  if (forwardedFor.length > 0) {
+    const firstForwarded = forwardedFor.split(',')[0]?.trim()
+    if (firstForwarded) return firstForwarded
+  }
+
+  const realIp = getSingleHeaderValue(req.headers['x-real-ip'])
+  if (realIp.length > 0) {
+    return realIp
+  }
+
+  return remoteAddress
+}
+
+function hashRelayRateLimitToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex').slice(0, 16)
+}
+
+function buildRelayPerIpRateLimitKey(req: IncomingMessage): string {
+  return getTrustedClientAddress(req)
+}
+
+function buildRelayPerClientRateLimitKey(req: IncomingMessage): string {
+  const clientAddress = getTrustedClientAddress(req)
+  const token = readBearerToken(req)
+  if (!token) return `${clientAddress}:anon`
+  return `${clientAddress}:${hashRelayRateLimitToken(token)}`
+}
+
+function compactRelayRateLimitRecords(
+  recordsByKey: Map<string, RelayEndpointRateLimitRecord>,
+  nowMs: number,
+): void {
+  if (recordsByKey.size < RELAY_AGENT_RATE_LIMIT_MAX_ENTRIES) return
+
+  for (const [key, record] of recordsByKey.entries()) {
+    const latestKnownMs = Math.max(record.windowStartedAtMs, record.blockedUntilMs)
+    if (nowMs - latestKnownMs > RELAY_AGENT_RATE_LIMIT_WINDOW_MS + RELAY_AGENT_RATE_LIMIT_BLOCK_MS) {
+      recordsByKey.delete(key)
+    }
+  }
+}
+
+function enforceRelayRateLimitCapacity(
+  recordsByKey: Map<string, RelayEndpointRateLimitRecord>,
+  targetKey: string,
+  nowMs: number,
+): void {
+  compactRelayRateLimitRecords(recordsByKey, nowMs)
+  if (recordsByKey.size < RELAY_AGENT_RATE_LIMIT_MAX_ENTRIES || recordsByKey.has(targetKey)) return
+
+  while (recordsByKey.size >= RELAY_AGENT_RATE_LIMIT_MAX_ENTRIES) {
+    const oldest = recordsByKey.keys().next().value
+    if (!oldest) return
+    recordsByKey.delete(oldest)
+  }
+}
+
+function consumeRelayRateLimitForKey(
+  key: string,
+  maxRequestsPerWindow: number,
+  recordsByKey: Map<string, RelayEndpointRateLimitRecord>,
+  nowMs: number,
+): { limited: boolean; retryAfterSeconds: number } {
+  const existing = recordsByKey.get(key)
+  if (!existing) {
+    enforceRelayRateLimitCapacity(recordsByKey, key, nowMs)
+    recordsByKey.set(key, {
+      requests: 1,
+      windowStartedAtMs: nowMs,
+      blockedUntilMs: 0,
+    })
+    return { limited: false, retryAfterSeconds: 0 }
+  }
+
+  if (existing.blockedUntilMs > nowMs) {
+    return {
+      limited: true,
+      retryAfterSeconds: Math.max(1, Math.ceil((existing.blockedUntilMs - nowMs) / 1000)),
+    }
+  }
+
+  if (nowMs - existing.windowStartedAtMs >= RELAY_AGENT_RATE_LIMIT_WINDOW_MS) {
+    recordsByKey.set(key, {
+      requests: 1,
+      windowStartedAtMs: nowMs,
+      blockedUntilMs: 0,
+    })
+    return { limited: false, retryAfterSeconds: 0 }
+  }
+
+  const nextRequests = existing.requests + 1
+  if (nextRequests > maxRequestsPerWindow) {
+    const blockedUntilMs = nowMs + RELAY_AGENT_RATE_LIMIT_BLOCK_MS
+    recordsByKey.set(key, {
+      requests: nextRequests,
+      windowStartedAtMs: existing.windowStartedAtMs,
+      blockedUntilMs,
+    })
+    return {
+      limited: true,
+      retryAfterSeconds: Math.max(1, Math.ceil((blockedUntilMs - nowMs) / 1000)),
+    }
+  }
+
+  recordsByKey.set(key, {
+    requests: nextRequests,
+    windowStartedAtMs: existing.windowStartedAtMs,
+    blockedUntilMs: 0,
+  })
+  return { limited: false, retryAfterSeconds: 0 }
+}
+
+function consumeRelayEndpointRateLimit(
+  req: IncomingMessage,
+  recordsByIp: Map<string, RelayEndpointRateLimitRecord>,
+  recordsByClientKey: Map<string, RelayEndpointRateLimitRecord>,
+): { limited: boolean; retryAfterSeconds: number } {
+  const nowMs = Date.now()
+  compactRelayRateLimitRecords(recordsByIp, nowMs)
+  compactRelayRateLimitRecords(recordsByClientKey, nowMs)
+
+  const ipDecision = consumeRelayRateLimitForKey(
+    buildRelayPerIpRateLimitKey(req),
+    RELAY_AGENT_RATE_LIMIT_MAX_PER_IP,
+    recordsByIp,
+    nowMs,
+  )
+  if (ipDecision.limited) {
+    return ipDecision
+  }
+
+  return consumeRelayRateLimitForKey(
+    buildRelayPerClientRateLimitKey(req),
+    RELAY_AGENT_RATE_LIMIT_MAX_PER_CLIENT_KEY,
+    recordsByClientKey,
+    nowMs,
+  )
 }
 
 function isLoopbackRequest(req: IncomingMessage): boolean {
@@ -1386,6 +1589,7 @@ class BridgeHttpError extends Error {
 type ResolvedServerRuntime = {
   scope: ServerRegistryScope
   server: CodexServerRecord
+  channelId: RelayChannelId
   runtime: ServerRuntime | null
 }
 
@@ -1397,6 +1601,10 @@ async function resolveServerRuntime(
   const scope = resolveServerRegistryScope(req)
   const registryState = await readServerRegistryState(scope)
   const requestedServerId = getRequestedServerId(req, url)
+  const requestedChannelId = getRequestedChannelId(req, url)
+  if (!requestedChannelId) {
+    throw new BridgeHttpError(400, 'Invalid channelId')
+  }
   const selectedServerId = requestedServerId ?? registryState.defaultServerId
 
   if (!isValidServerId(selectedServerId)) {
@@ -1408,9 +1616,21 @@ async function resolveServerRuntime(
     throw new BridgeHttpError(404, `Unknown server id "${selectedServerId}"`)
   }
 
+  if (server.transport === 'local' && requestedChannelId !== RELAY_HUB_CHANNEL) {
+    throw new BridgeHttpError(409, 'channelId is only supported for relay transport servers')
+  }
+
+  if (server.transport === 'relay') {
+    const expectedChannelId = server.relay ? `agent:${server.relay.agentId}` : ''
+    if (requestedChannelId !== RELAY_HUB_CHANNEL && requestedChannelId !== expectedChannelId) {
+      throw new BridgeHttpError(400, `Invalid channel id "${requestedChannelId}" for relay server "${server.id}"`)
+    }
+  }
+
   return {
     scope,
     server,
+    channelId: requestedChannelId,
     runtime: server.transport === 'relay' ? null : runtimeRegistry.getRuntime(scope.cacheKey, server.id),
   }
 }
@@ -1590,6 +1810,20 @@ function readBearerToken(req: IncomingMessage): string {
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const { runtimeRegistry, relayHub } = getSharedBridgeState()
+  const relayRateLimitByIp = new Map<string, RelayEndpointRateLimitRecord>()
+  const relayRateLimitByClientKey = new Map<string, RelayEndpointRateLimitRecord>()
+
+  function enforceRelayRateLimit(req: IncomingMessage, res: ServerResponse): boolean {
+    const decision = consumeRelayEndpointRateLimit(req, relayRateLimitByIp, relayRateLimitByClientKey)
+    if (!decision.limited) return true
+
+    res.setHeader('Retry-After', String(decision.retryAfterSeconds))
+    setJson(res, 429, {
+      error: 'Too many relay agent requests. Try again later.',
+      retryAfterSeconds: decision.retryAfterSeconds,
+    })
+    return false
+  }
 
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     try {
@@ -1646,6 +1880,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'POST' && url.pathname === '/codex-api/relay/agent/connect') {
         try {
+          if (!enforceRelayRateLimit(req, res)) {
+            return
+          }
           const token = readBearerToken(req)
           const connected = relayHub.connectWithToken(token)
           setJson(res, 200, { data: connected })
@@ -1660,13 +1897,17 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'GET' && url.pathname === '/codex-api/relay/agent/pull') {
         try {
+          if (!enforceRelayRateLimit(req, res)) {
+            return
+          }
+          const token = readBearerToken(req)
           const sessionId = url.searchParams.get('sessionId')?.trim() ?? ''
           if (!sessionId) {
             setJson(res, 400, { error: 'Missing sessionId' })
             return
           }
           const waitMs = url.searchParams.get('waitMs')
-          const messages = await relayHub.pullMessages(sessionId, waitMs === null ? undefined : Number(waitMs))
+          const messages = await relayHub.pullMessagesAuthenticated(token, sessionId, waitMs === null ? undefined : Number(waitMs))
           setJson(res, 200, { data: { messages } })
           return
         } catch (error) {
@@ -1679,6 +1920,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'POST' && url.pathname === '/codex-api/relay/agent/push') {
         try {
+          if (!enforceRelayRateLimit(req, res)) {
+            return
+          }
+          const token = readBearerToken(req)
           const sessionId = url.searchParams.get('sessionId')?.trim() ?? ''
           if (!sessionId) {
             setJson(res, 400, { error: 'Missing sessionId' })
@@ -1686,7 +1931,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
           const payload = asRecord(await readJsonBody(req))
           const messages = Array.isArray(payload?.messages) ? payload.messages : []
-          const result = relayHub.pushMessages(sessionId, messages)
+          const result = relayHub.pushMessagesAuthenticated(token, sessionId, messages)
           setJson(res, 200, { data: result })
           return
         } catch (error) {
@@ -2285,6 +2530,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'GET' && url.pathname === '/codex-api/events') {
         const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
         const server = resolved.server
+        const requestedChannelId = resolved.channelId
         res.statusCode = 200
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
         res.setHeader('Cache-Control', 'no-cache, no-transform')
@@ -2299,6 +2545,9 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
               },
               (notification) => {
                 if (res.writableEnded || res.destroyed) return
+                if (requestedChannelId !== RELAY_HUB_CHANNEL && notification.route.channelId !== requestedChannelId) {
+                  return
+                }
                 const payload = {
                   method: notification.event,
                   params: notification.params,

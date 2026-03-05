@@ -1,8 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto'
 import {
-  RELAY_HUB_CHANNEL,
   RELAY_PROTOCOL,
   RELAY_PROTOCOL_VERSION,
+  type RelayChannelId,
   type RelayEventEnvelope,
   type RelayRequestEnvelope,
   type RelayResponseEnvelope,
@@ -13,6 +13,8 @@ const MAX_PULL_WAIT_MS = 25_000
 const MIN_RPC_TIMEOUT_MS = 5_000
 const MAX_RPC_TIMEOUT_MS = 300_000
 const DEFAULT_RPC_TIMEOUT_MS = 60_000
+const MAX_PENDING_RPC = 2_000
+const MAX_SESSION_QUEUE = 512
 
 type RelayAgentRecord = {
   id: string
@@ -35,10 +37,14 @@ type RelayAgentPublicRecord = {
 type RelaySession = {
   sessionId: string
   agentId: string
+  tokenHash: string
   createdAtIso: string
   updatedAtIso: string
   queue: RelayRequestEnvelope[]
-  waiters: Set<(messages: RelayRequestEnvelope[]) => void>
+  waiter?: {
+    resolve: (messages: RelayRequestEnvelope[]) => void
+    timeoutHandle: NodeJS.Timeout
+  }
 }
 
 type PendingRelayRpc = {
@@ -114,6 +120,10 @@ function toRouteKey(route: { scopeKey: string; serverId: string }): string {
   return `${route.scopeKey}::${route.serverId}`
 }
 
+function toAgentChannelId(agentId: string): RelayChannelId {
+  return `agent:${agentId}`
+}
+
 export class RelayHubError extends Error {
   readonly code: string
   readonly statusCode: number
@@ -131,6 +141,7 @@ export class OutboundRelayHub {
   private readonly sessionIdByAgentId = new Map<string, string>()
   private readonly pendingRpcById = new Map<string, PendingRelayRpc>()
   private readonly listenersByRouteKey = new Map<string, Set<RelayNotificationListener>>()
+  private readonly allowedRoutesByAgentId = new Map<string, Set<string>>()
 
   listAgents(): RelayAgentPublicRecord[] {
     return Array.from(this.agentsById.values())
@@ -167,23 +178,7 @@ export class OutboundRelayHub {
   }
 
   connectWithToken(token: string): { sessionId: string; pollTimeoutMs: number; agent: RelayAgentPublicRecord } {
-    const normalized = token.trim()
-    if (!normalized) {
-      throw new RelayHubError('relay_auth_failed', 'Missing relay agent token', 401)
-    }
-
-    const tokenHash = hashToken(normalized)
-    let matchedAgent: RelayAgentRecord | null = null
-    for (const agent of this.agentsById.values()) {
-      if (agent.tokenHash === tokenHash) {
-        matchedAgent = agent
-        break
-      }
-    }
-
-    if (!matchedAgent) {
-      throw new RelayHubError('relay_auth_failed', 'Invalid relay agent token', 401)
-    }
+    const { agent: matchedAgent, tokenHash } = this.resolveAgentByToken(token)
 
     const previousSessionId = this.sessionIdByAgentId.get(matchedAgent.id)
     if (previousSessionId) {
@@ -194,10 +189,10 @@ export class OutboundRelayHub {
     const session: RelaySession = {
       sessionId: createSessionId(),
       agentId: matchedAgent.id,
+      tokenHash,
       createdAtIso: nowIso,
       updatedAtIso: nowIso,
       queue: [],
-      waiters: new Set(),
     }
     this.sessionById.set(session.sessionId, session)
     this.sessionIdByAgentId.set(matchedAgent.id, session.sessionId)
@@ -212,11 +207,8 @@ export class OutboundRelayHub {
     }
   }
 
-  pullMessages(sessionId: string, waitMsRaw?: unknown): Promise<RelayRequestEnvelope[]> {
-    const session = this.sessionById.get(sessionId)
-    if (!session) {
-      throw new RelayHubError('relay_invalid_session', 'Unknown relay session', 401)
-    }
+  pullMessagesAuthenticated(token: string, sessionId: string, waitMsRaw?: unknown): Promise<RelayRequestEnvelope[]> {
+    const session = this.authenticateSession(token, sessionId)
 
     const waitMs = clampPullWaitMs(waitMsRaw)
     this.touchSession(session)
@@ -225,27 +217,33 @@ export class OutboundRelayHub {
       return Promise.resolve(this.flushSessionQueue(session))
     }
 
+    if (session.waiter) {
+      clearTimeout(session.waiter.timeoutHandle)
+      session.waiter.resolve([])
+      session.waiter = undefined
+    }
+
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
-        session.waiters.delete(handleQueue)
+        session.waiter = undefined
         resolve(this.flushSessionQueue(session))
       }, waitMs)
 
       const handleQueue = (messages: RelayRequestEnvelope[]) => {
         clearTimeout(timeout)
-        session.waiters.delete(handleQueue)
+        session.waiter = undefined
         resolve(messages)
       }
 
-      session.waiters.add(handleQueue)
+      session.waiter = {
+        resolve: handleQueue,
+        timeoutHandle: timeout,
+      }
     })
   }
 
-  pushMessages(sessionId: string, rawMessages: unknown[]): { accepted: number } {
-    const session = this.sessionById.get(sessionId)
-    if (!session) {
-      throw new RelayHubError('relay_invalid_session', 'Unknown relay session', 401)
-    }
+  pushMessagesAuthenticated(token: string, sessionId: string, rawMessages: unknown[]): { accepted: number } {
+    const session = this.authenticateSession(token, sessionId)
 
     this.touchSession(session)
     let accepted = 0
@@ -277,6 +275,10 @@ export class OutboundRelayHub {
     params: unknown,
     timeoutMsRaw?: unknown,
   ): Promise<unknown> {
+    if (this.pendingRpcById.size >= MAX_PENDING_RPC) {
+      throw new RelayHubError('relay_overloaded', 'Relay hub is overloaded', 503)
+    }
+
     const sessionId = this.sessionIdByAgentId.get(route.agentId)
     if (!sessionId) {
       throw new RelayHubError('relay_agent_offline', `Relay agent "${route.agentId}" is offline`, 503)
@@ -290,6 +292,15 @@ export class OutboundRelayHub {
 
     const relayId = createRelayId()
     const timeoutMs = clampTimeout(timeoutMsRaw, DEFAULT_RPC_TIMEOUT_MS)
+    if (session.queue.length >= MAX_SESSION_QUEUE) {
+      throw new RelayHubError('relay_backpressure', 'Relay agent queue is full', 429)
+    }
+
+    const routeKey = toRouteKey({ scopeKey: route.scopeKey, serverId: route.serverId })
+    const allowedRoutes = this.allowedRoutesByAgentId.get(route.agentId) ?? new Set<string>()
+    allowedRoutes.add(routeKey)
+    this.allowedRoutesByAgentId.set(route.agentId, allowedRoutes)
+
     const envelope: RelayRequestEnvelope = {
       protocol: RELAY_PROTOCOL,
       version: RELAY_PROTOCOL_VERSION,
@@ -298,7 +309,7 @@ export class OutboundRelayHub {
       route: {
         scopeKey: route.scopeKey,
         serverId: route.serverId,
-        channelId: `agent:${route.agentId}`,
+        channelId: toAgentChannelId(route.agentId),
       },
       method,
       params: params ?? null,
@@ -335,6 +346,31 @@ export class OutboundRelayHub {
     }
   }
 
+  private resolveAgentByToken(token: string): { agent: RelayAgentRecord; tokenHash: string } {
+    const normalized = token.trim()
+    if (!normalized) {
+      throw new RelayHubError('relay_auth_failed', 'Missing relay agent token', 401)
+    }
+
+    const tokenHash = hashToken(normalized)
+    for (const agent of this.agentsById.values()) {
+      if (agent.tokenHash === tokenHash) {
+        return { agent, tokenHash }
+      }
+    }
+
+    throw new RelayHubError('relay_auth_failed', 'Invalid relay agent token', 401)
+  }
+
+  private authenticateSession(token: string, sessionId: string): RelaySession {
+    const { agent, tokenHash } = this.resolveAgentByToken(token)
+    const session = this.sessionById.get(sessionId)
+    if (!session || session.agentId !== agent.id || session.tokenHash !== tokenHash) {
+      throw new RelayHubError('relay_invalid_session', 'Unknown relay session', 401)
+    }
+    return session
+  }
+
   private touchSession(session: RelaySession): void {
     const nowIso = new Date().toISOString()
     session.updatedAtIso = nowIso
@@ -355,15 +391,15 @@ export class OutboundRelayHub {
   }
 
   private flushWaiters(session: RelaySession): void {
-    if (session.waiters.size === 0 || session.queue.length === 0) {
+    if (!session.waiter || session.queue.length === 0) {
       return
     }
 
     const messages = this.flushSessionQueue(session)
-    for (const waiter of session.waiters) {
-      waiter(messages)
-    }
-    session.waiters.clear()
+    const waiter = session.waiter
+    session.waiter = undefined
+    clearTimeout(waiter.timeoutHandle)
+    waiter.resolve(messages)
   }
 
   private acceptResponseEnvelope(record: Record<string, unknown>, agentId: string): boolean {
@@ -393,6 +429,17 @@ export class OutboundRelayHub {
     const scopeKey = typeof route?.scopeKey === 'string' ? route.scopeKey.trim() : ''
     const serverId = typeof route?.serverId === 'string' ? route.serverId.trim() : ''
     if (!scopeKey || !serverId) return false
+    const routeChannelId = typeof route?.channelId === 'string' ? route.channelId.trim() : ''
+    const expectedChannelId = toAgentChannelId(agentId)
+    if (routeChannelId.length > 0 && routeChannelId !== expectedChannelId) {
+      return false
+    }
+
+    const routeKey = toRouteKey({ scopeKey, serverId })
+    const allowedRoutes = this.allowedRoutesByAgentId.get(agentId)
+    if (!allowedRoutes || !allowedRoutes.has(routeKey)) {
+      return false
+    }
 
     const eventName = typeof record.event === 'string' && record.event.trim().length > 0
       ? record.event.trim()
@@ -410,14 +457,13 @@ export class OutboundRelayHub {
       route: {
         scopeKey,
         serverId,
-        channelId: `agent:${agentId}`,
+        channelId: expectedChannelId,
       },
       params,
       sentAtIso,
       agentId,
     }
 
-    const routeKey = toRouteKey({ scopeKey, serverId })
     const listeners = this.listenersByRouteKey.get(routeKey)
     if (!listeners || listeners.size === 0) return true
     for (const listener of listeners) {
@@ -431,9 +477,11 @@ export class OutboundRelayHub {
     if (!session) return
     this.sessionById.delete(sessionId)
     this.sessionIdByAgentId.delete(session.agentId)
-    for (const waiter of session.waiters) {
-      waiter([])
+    this.allowedRoutesByAgentId.delete(session.agentId)
+    if (session.waiter) {
+      clearTimeout(session.waiter.timeoutHandle)
+      session.waiter.resolve([])
+      session.waiter = undefined
     }
-    session.waiters.clear()
   }
 }
