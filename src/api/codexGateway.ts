@@ -335,6 +335,67 @@ export async function getProjectRootSuggestion(basePath: string): Promise<{ name
   }
 }
 
+export type FsDirectoryEntry = {
+  name: string
+  path: string
+}
+
+export type FsDirectoryListing = {
+  currentPath: string
+  homePath: string
+  parentPath: string | null
+  entries: FsDirectoryEntry[]
+}
+
+function normalizeFsDirectoryListing(payload: unknown): FsDirectoryListing {
+  const data =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {}
+
+  const entriesRaw = Array.isArray(data.entries) ? data.entries : []
+  const entries: FsDirectoryEntry[] = []
+
+  for (const row of entriesRaw) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+    const record = row as Record<string, unknown>
+    const name = typeof record.name === 'string' ? record.name.trim() : ''
+    const path = typeof record.path === 'string' ? record.path.trim() : ''
+    if (!name || !path) continue
+    entries.push({ name, path })
+  }
+
+  return {
+    currentPath: typeof data.currentPath === 'string' ? data.currentPath.trim() : '',
+    homePath: typeof data.homePath === 'string' ? data.homePath.trim() : '',
+    parentPath: typeof data.parentPath === 'string' ? data.parentPath.trim() : null,
+    entries,
+  }
+}
+
+export async function getFsDirectoryList(path?: string): Promise<FsDirectoryListing> {
+  const query = new URLSearchParams()
+  const normalizedPath = path?.trim() ?? ''
+  if (normalizedPath) {
+    query.set('path', normalizedPath)
+  }
+
+  const requestUrl = query.size > 0 ? `/codex-api/fs/list?${query.toString()}` : '/codex-api/fs/list'
+  const response = await fetch(requestUrl)
+  const payload = (await response.json()) as unknown
+  if (!response.ok) {
+    const message = getErrorMessageFromPayload(payload, 'Failed to list folders')
+    throw new Error(message)
+  }
+
+  const envelope =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {}
+
+  return normalizeFsDirectoryListing(envelope.data)
+}
+
 function getErrorMessageFromPayload(payload: unknown, fallback: string): string {
   const record = payload && typeof payload === 'object' && !Array.isArray(payload)
     ? (payload as Record<string, unknown>)

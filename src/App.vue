@@ -67,9 +67,9 @@
     </template>
 
     <template #content>
-      <section class="content-root">
-        <ContentHeader :title="contentTitle">
-          <template #leading>
+        <section class="content-root">
+          <ContentHeader :title="contentTitle">
+            <template #leading>
             <SidebarThreadControls
               v-if="isSidebarCollapsed || isMobile"
               class="sidebar-thread-controls-header-host"
@@ -79,8 +79,12 @@
               :show-new-thread-button="true"
               @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
               @toggle-auto-refresh="onToggleAutoRefreshTimer"
-              @start-new-thread="onStartNewThreadFromToolbar"
+                @start-new-thread="onStartNewThreadFromToolbar"
             />
+          </template>
+          <template #meta>
+            <CwdPicker v-if="isHomeRoute" v-model="newThreadCwd" />
+            <p v-else-if="headerCwdDisplay" class="header-cwd-readonly">{{ headerCwdDisplay }}</p>
           </template>
         </ContentHeader>
 
@@ -92,16 +96,6 @@
             <div class="content-grid">
               <div class="new-thread-empty">
                 <p class="new-thread-hero">Let's build</p>
-                <ComposerDropdown class="new-thread-folder-dropdown" :model-value="newThreadCwd"
-                  :options="newThreadFolderOptions" placeholder="Choose folder"
-                  :enable-search="true"
-                  search-placeholder="Quick search project"
-                  :show-add-action="true"
-                  add-action-label="+ Add new project"
-                  :default-add-value="defaultNewProjectName"
-                  add-placeholder="Project name or absolute path"
-                  :disabled="false" @update:model-value="onSelectNewThreadFolder"
-                  @add="onAddNewProject" />
               </div>
 
               <ThreadComposer :active-thread-id="composerThreadContextId"
@@ -161,14 +155,13 @@ import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadConversation from './components/content/ThreadConversation.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
-import ComposerDropdown from './components/content/ComposerDropdown.vue'
+import CwdPicker from './components/content/CwdPicker.vue'
 import SkillsHub from './components/content/SkillsHub.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerX from './components/icons/IconTablerX.vue'
 import { useDesktopState } from './composables/useDesktopState'
 import { useMobile } from './composables/useMobile'
-import { getProjectRootSuggestion, openProjectRoot } from './api/codexGateway'
 import type { ReasoningEffort, ThreadScrollState } from './types/codex'
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
@@ -212,7 +205,6 @@ const {
   renameProject,
   removeProject,
   reorderProject,
-  pinProjectToTop,
   toggleAutoRefreshTimer,
   startPolling,
   stopPolling,
@@ -223,12 +215,11 @@ const router = useRouter()
 const { isMobile } = useMobile()
 const isRouteSyncInProgress = ref(false)
 const hasInitialized = ref(false)
-const newThreadCwd = ref('')
+const newThreadCwd = ref('~')
 const isSidebarCollapsed = ref(loadSidebarCollapsed())
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
 const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
-const defaultNewProjectName = ref('New Project (1)')
 
 const routeThreadId = computed(() => {
   const rawThreadId = route.params.threadId
@@ -252,6 +243,11 @@ const contentTitle = computed(() => {
   if (isHomeRoute.value) return 'New thread'
   return selectedThread.value?.title ?? 'Choose a thread'
 })
+const headerCwdDisplay = computed(() => {
+  if (isSkillsRoute.value) return ''
+  const homePath = selectedThread.value?.cwd?.trim() ?? ''
+  return homePath || '~'
+})
 const autoRefreshButtonLabel = computed(() =>
   isAutoRefreshEnabled.value
     ? `Auto refresh in ${String(autoRefreshSecondsLeft.value)}s`
@@ -268,34 +264,9 @@ const filteredMessages = computed(() =>
 const liveOverlay = computed(() => selectedLiveOverlay.value)
 const composerThreadContextId = computed(() => (isHomeRoute.value ? '__new-thread__' : selectedThreadId.value))
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThread.value?.inProgress === true)
-const newThreadFolderOptions = computed(() => {
-  const options: Array<{ value: string; label: string }> = []
-  const seenCwds = new Set<string>()
-
-  for (const group of projectGroups.value) {
-    const cwd = group.threads[0]?.cwd?.trim() ?? ''
-    if (!cwd || seenCwds.has(cwd)) continue
-    seenCwds.add(cwd)
-    options.push({
-      value: cwd,
-      label: projectDisplayNameById.value[group.projectName] ?? group.projectName,
-    })
-  }
-
-  const selectedCwd = newThreadCwd.value.trim()
-  if (selectedCwd && !seenCwds.has(selectedCwd)) {
-    options.unshift({
-      value: selectedCwd,
-      label: getPathLeafName(selectedCwd),
-    })
-  }
-
-  return options
-})
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeyDown)
   void initialize()
-  void refreshDefaultProjectName()
 })
 
 onUnmounted(() => {
@@ -339,22 +310,15 @@ function onArchiveThread(threadId: string): void {
   void archiveThreadById(threadId)
 }
 
-function onStartNewThread(projectName: string): void {
-  const projectGroup = projectGroups.value.find((group) => group.projectName === projectName)
-  const projectCwd = projectGroup?.threads[0]?.cwd?.trim() ?? ''
-  if (projectCwd) {
-    newThreadCwd.value = projectCwd
-  }
+function onStartNewThread(_projectName: string): void {
+  newThreadCwd.value = '~'
   if (isMobile.value) setSidebarCollapsed(true)
   if (isHomeRoute.value) return
   void router.push({ name: 'home' })
 }
 
 function onStartNewThreadFromToolbar(): void {
-  const cwd = selectedThread.value?.cwd?.trim() ?? ''
-  if (cwd) {
-    newThreadCwd.value = cwd
-  }
+  newThreadCwd.value = '~'
   if (isMobile.value) setSidebarCollapsed(true)
   if (isHomeRoute.value) return
   void router.push({ name: 'home' })
@@ -406,88 +370,6 @@ function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; ski
     return
   }
   void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode)
-}
-
-function onSelectNewThreadFolder(cwd: string): void {
-  newThreadCwd.value = cwd.trim()
-}
-
-async function onAddNewProject(rawInput: string): Promise<void> {
-  const normalizedInput = rawInput.trim()
-  if (!normalizedInput) return
-
-  const isPath = looksLikePath(normalizedInput)
-  const targetPath = isPath
-    ? normalizedInput
-    : joinPath(getProjectBaseDirectory(), normalizedInput)
-  if (!targetPath) return
-
-  try {
-    const normalizedPath = await openProjectRoot(targetPath, {
-      createIfMissing: !isPath,
-      label: isPath ? '' : normalizedInput,
-    })
-    if (normalizedPath) {
-      newThreadCwd.value = normalizedPath
-      pinProjectToTop(getPathLeafName(normalizedPath))
-      void refreshDefaultProjectName()
-    }
-  } catch {
-    // Error is surfaced on next request if path is invalid.
-  }
-}
-
-function looksLikePath(value: string): boolean {
-  if (!value) return false
-  if (value.startsWith('~/')) return true
-  if (value.startsWith('/')) return true
-  return /^[a-zA-Z]:[\\/]/.test(value)
-}
-
-async function refreshDefaultProjectName(): Promise<void> {
-  const baseDir = getProjectBaseDirectory()
-  if (!baseDir) {
-    defaultNewProjectName.value = 'New Project (1)'
-    return
-  }
-
-  try {
-    const suggestion = await getProjectRootSuggestion(baseDir)
-    defaultNewProjectName.value = suggestion.name || 'New Project (1)'
-  } catch {
-    defaultNewProjectName.value = 'New Project (1)'
-  }
-}
-
-function getProjectBaseDirectory(): string {
-  const selected = newThreadCwd.value.trim()
-  if (selected) return getPathParent(selected)
-  const first = newThreadFolderOptions.value[0]?.value?.trim() ?? ''
-  if (first) return getPathParent(first)
-  return ''
-}
-
-function getPathParent(path: string): string {
-  const trimmed = path.trim().replace(/\/+$/, '')
-  if (!trimmed) return ''
-  const slashIndex = trimmed.lastIndexOf('/')
-  if (slashIndex <= 0) return ''
-  return trimmed.slice(0, slashIndex)
-}
-
-function getPathLeafName(path: string): string {
-  const trimmed = path.trim().replace(/\/+$/, '')
-  if (!trimmed) return ''
-  const slashIndex = trimmed.lastIndexOf('/')
-  if (slashIndex < 0) return trimmed
-  return trimmed.slice(slashIndex + 1)
-}
-
-function joinPath(parent: string, child: string): string {
-  const normalizedParent = parent.trim().replace(/\/+$/, '')
-  const normalizedChild = child.trim().replace(/^\/+/, '')
-  if (!normalizedParent || !normalizedChild) return ''
-  return `${normalizedParent}/${normalizedChild}`
 }
 
 function onSelectModel(modelId: string): void {
@@ -597,29 +479,6 @@ watch(
   },
 )
 
-watch(
-  () => newThreadFolderOptions.value,
-  (options) => {
-    if (options.length === 0) {
-      newThreadCwd.value = ''
-      return
-    }
-    const hasSelected = options.some((option) => option.value === newThreadCwd.value)
-    if (!hasSelected) {
-      newThreadCwd.value = options[0].value
-    }
-    void refreshDefaultProjectName()
-  },
-  { immediate: true },
-)
-
-watch(
-  () => newThreadCwd.value,
-  () => {
-    void refreshDefaultProjectName()
-  },
-)
-
 watch(isMobile, (mobile) => {
   if (mobile && !isSidebarCollapsed.value) {
     setSidebarCollapsed(true)
@@ -705,6 +564,10 @@ async function submitFirstMessageForNewThread(
   @apply ml-1;
 }
 
+.header-cwd-readonly {
+  @apply m-0 max-w-full truncate text-xs text-zinc-500;
+}
+
 .content-body {
   @apply flex-1 min-h-0 w-full flex flex-col gap-2 sm:gap-3 pt-1 pb-2 sm:pb-4 overflow-y-hidden overflow-x-visible;
 }
@@ -731,22 +594,6 @@ async function submitFirstMessageForNewThread(
 
 .new-thread-hero {
   @apply m-0 text-2xl sm:text-[2.5rem] font-normal leading-[1.05] text-zinc-900;
-}
-
-.new-thread-folder-dropdown {
-  @apply text-2xl sm:text-[2.5rem] text-zinc-500;
-}
-
-.new-thread-folder-dropdown :deep(.composer-dropdown-trigger) {
-  @apply h-auto text-2xl sm:text-[2.5rem] leading-[1.05];
-}
-
-.new-thread-folder-dropdown :deep(.composer-dropdown-value) {
-  @apply leading-[1.05];
-}
-
-.new-thread-folder-dropdown :deep(.composer-dropdown-chevron) {
-  @apply h-4 w-4 sm:h-5 sm:w-5 mt-0;
 }
 
 .build-badge {

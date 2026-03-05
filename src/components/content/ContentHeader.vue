@@ -3,7 +3,12 @@
     <div class="content-leading">
       <slot name="leading" />
     </div>
-    <h1 class="content-title">{{ title }}</h1>
+    <div class="content-main">
+      <h1 class="content-title">{{ title }}</h1>
+      <div v-if="$slots.meta" class="content-meta">
+        <slot name="meta" />
+      </div>
+    </div>
     <div class="content-actions">
       <slot name="actions" />
     </div>
@@ -23,8 +28,16 @@ defineProps<{
   @apply relative z-10 w-full min-h-12 sm:min-h-14 flex items-center gap-2 sm:gap-3 px-2 sm:px-3 pt-3 sm:pt-4 pb-2 bg-white;
 }
 
+.content-main {
+  @apply min-w-0 flex-1 flex flex-col items-start justify-center gap-0.5;
+}
+
 .content-title {
-  @apply m-0 min-w-0 flex-1 truncate text-sm font-medium leading-6 text-slate-900 max-sm:text-xs;
+  @apply m-0 min-w-0 w-full truncate text-sm font-medium leading-6 text-slate-900 max-sm:text-xs;
+}
+
+.content-meta {
+  @apply min-w-0 w-full;
 }
 
 .content-actions {
