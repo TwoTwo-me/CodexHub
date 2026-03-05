@@ -8,9 +8,7 @@ function isLocalhostRequest(req: Request): boolean {
   if (remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1') {
     return true
   }
-
-  const host = (req.headers.host ?? '').toLowerCase()
-  return host.startsWith('localhost:') || host === 'localhost' || host.startsWith('127.0.0.1:')
+  return false
 }
 
 function constantTimeCompare(a: string, b: string): boolean {
@@ -79,11 +77,6 @@ export function createAuthMiddleware(password: string): RequestHandler {
   const validTokens = new Set<string>()
 
   return (req: Request, res: Response, next: NextFunction): void => {
-    if (isLocalhostRequest(req)) {
-      next()
-      return
-    }
-
     // Handle login POST
     if (req.method === 'POST' && req.path === '/auth/login') {
       let body = ''
@@ -101,8 +94,12 @@ export function createAuthMiddleware(password: string): RequestHandler {
 
           const token = randomBytes(32).toString('hex')
           validTokens.add(token)
+          const localRequest = isLocalhostRequest(req)
+          const secureCookie = req.secure || (!localRequest && req.headers['x-forwarded-proto'] === 'https')
+            ? '; Secure'
+            : ''
 
-          res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict`)
+          res.setHeader('Set-Cookie', `${TOKEN_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict${secureCookie}`)
           res.json({ ok: true })
         } catch {
           res.status(400).json({ error: 'Invalid request body' })

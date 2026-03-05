@@ -15,7 +15,7 @@ The test suite validates helper/API contract behavior for server routing:
 
 ## 2) Prepare host auth file for Docker
 
-The Docker stack expects a local auth copy at `docker/multi-server/auth/auth.json`.
+The Docker stack uses an **ephemeral auth file** (default: `/tmp/codexui-multi-server-auth/auth.json`).
 
 ```bash
 npm run docker:multi-server:prepare-auth
@@ -25,6 +25,12 @@ By default this copies from `~/.codex/auth.json`. To override:
 
 ```bash
 CODEX_AUTH_FILE=/path/to/auth.json npm run docker:multi-server:prepare-auth
+```
+
+To override the target location:
+
+```bash
+CODEX_MULTI_SERVER_AUTH_FILE=/secure/tmp/auth.json npm run docker:multi-server:prepare-auth
 ```
 
 ## 3) Start Codex CLI multi-server containers
@@ -54,7 +60,9 @@ Smoke checks verify:
 npm run docker:multi-server:down
 ```
 
+`docker:multi-server:down` also removes the ephemeral auth copy.
+
 ## Notes
 
-- `docker/multi-server/auth/auth.json` is intentionally gitignored.
+- Never store real auth tokens inside the repository tree.
 - Re-run `docker:multi-server:prepare-auth` whenever host auth tokens rotate.

@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker/multi-server/docker-compose.yml"
+AUTH_FILE="${CODEX_MULTI_SERVER_AUTH_FILE:-${TMPDIR:-/tmp}/codexui-multi-server-auth/auth.json}"
+export CODEX_MULTI_SERVER_AUTH_FILE="$AUTH_FILE"
 
 services=(codex-cli-a codex-cli-b)
 ports=(19101 19102)

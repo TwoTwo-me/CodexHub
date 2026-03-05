@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { homedir } from 'node:os'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 
 type JsonRpcCall = {
@@ -49,6 +49,18 @@ type PendingServerRequest = {
   method: string
   params: unknown
   receivedAtIso: string
+}
+
+type CodexServerRecord = {
+  id: string
+  name: string
+  createdAtIso: string
+  updatedAtIso: string
+}
+
+type ServerRegistryState = {
+  defaultServerId: string
+  servers: CodexServerRecord[]
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -378,6 +390,247 @@ function getCodexGlobalStatePath(): string {
   return join(getCodexHomeDir(), '.codex-global-state.json')
 }
 
+const SERVER_REGISTRY_STATE_KEY = 'codexui-server-registry'
+const DEFAULT_SERVER_ID = 'default'
+const DEFAULT_SERVER_NAME = 'Default server'
+const MAX_SERVER_ID_LENGTH = 64
+const SERVER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+const MAX_JSON_BODY_BYTES = 1024 * 1024
+const MAX_TRANSCRIBE_BODY_BYTES = 25 * 1024 * 1024
+let cachedServerRegistryState: ServerRegistryState | null = null
+
+function cloneServerRecord(record: CodexServerRecord): CodexServerRecord {
+  return { ...record }
+}
+
+function cloneServerRegistryState(state: ServerRegistryState): ServerRegistryState {
+  return {
+    defaultServerId: state.defaultServerId,
+    servers: state.servers.map(cloneServerRecord),
+  }
+}
+
+export function isValidServerId(value: string): boolean {
+  return SERVER_ID_PATTERN.test(value)
+}
+
+function normalizeServerRecord(value: unknown, nowIso: string): CodexServerRecord | null {
+  const record = asRecord(value)
+  if (!record) return null
+
+  const id = typeof record.id === 'string' ? record.id.trim() : ''
+  if (!isValidServerId(id)) {
+    return null
+  }
+
+  const name = typeof record.name === 'string' && record.name.trim().length > 0
+    ? record.name.trim()
+    : id
+
+  const createdAtIso = typeof record.createdAtIso === 'string' && record.createdAtIso.trim().length > 0
+    ? record.createdAtIso.trim()
+    : nowIso
+  const updatedAtIso = typeof record.updatedAtIso === 'string' && record.updatedAtIso.trim().length > 0
+    ? record.updatedAtIso.trim()
+    : createdAtIso
+
+  return {
+    id,
+    name,
+    createdAtIso,
+    updatedAtIso,
+  }
+}
+
+function createDefaultServerRecord(nowIso: string): CodexServerRecord {
+  return {
+    id: DEFAULT_SERVER_ID,
+    name: DEFAULT_SERVER_NAME,
+    createdAtIso: nowIso,
+    updatedAtIso: nowIso,
+  }
+}
+
+export function normalizeServerRegistryState(value: unknown, nowIso = new Date().toISOString()): ServerRegistryState {
+  const record = asRecord(value)
+  const rawServers = Array.isArray(record?.servers) ? record?.servers : []
+  const serversById = new Map<string, CodexServerRecord>()
+
+  for (const item of rawServers) {
+    const normalized = normalizeServerRecord(item, nowIso)
+    if (!normalized || serversById.has(normalized.id)) continue
+    serversById.set(normalized.id, normalized)
+  }
+
+  if (serversById.size === 0) {
+    const defaultServer = createDefaultServerRecord(nowIso)
+    return {
+      defaultServerId: DEFAULT_SERVER_ID,
+      servers: [defaultServer],
+    }
+  }
+
+  const candidateDefaultServerId = typeof record?.defaultServerId === 'string' ? record.defaultServerId.trim() : ''
+  const hasCandidateDefault = candidateDefaultServerId.length > 0 && serversById.has(candidateDefaultServerId)
+  const defaultServerId = hasCandidateDefault ? candidateDefaultServerId : (serversById.keys().next().value ?? DEFAULT_SERVER_ID)
+
+  return {
+    defaultServerId,
+    servers: Array.from(serversById.values()),
+  }
+}
+
+async function readCodexGlobalStatePayload(): Promise<Record<string, unknown>> {
+  const statePath = getCodexGlobalStatePath()
+  try {
+    const raw = await readFile(statePath, 'utf8')
+    return asRecord(JSON.parse(raw)) ?? {}
+  } catch {
+    return {}
+  }
+}
+
+async function writeCodexGlobalStatePayload(payload: Record<string, unknown>): Promise<void> {
+  const statePath = getCodexGlobalStatePath()
+  await writeFile(statePath, JSON.stringify(payload), 'utf8')
+}
+
+async function readServerRegistryState(options: { persistNormalized?: boolean } = {}): Promise<ServerRegistryState> {
+  if (cachedServerRegistryState && options.persistNormalized !== true) {
+    return cloneServerRegistryState(cachedServerRegistryState)
+  }
+
+  const payload = await readCodexGlobalStatePayload()
+  const rawValue = payload[SERVER_REGISTRY_STATE_KEY]
+  const normalized = normalizeServerRegistryState(rawValue)
+  cachedServerRegistryState = cloneServerRegistryState(normalized)
+  const shouldPersist = options.persistNormalized === true
+    && JSON.stringify(rawValue) !== JSON.stringify(normalized)
+  if (shouldPersist) {
+    payload[SERVER_REGISTRY_STATE_KEY] = normalized
+    await writeCodexGlobalStatePayload(payload)
+  }
+  return cloneServerRegistryState(normalized)
+}
+
+async function writeServerRegistryState(nextState: ServerRegistryState): Promise<void> {
+  const payload = await readCodexGlobalStatePayload()
+  const normalized = normalizeServerRegistryState(nextState)
+  payload[SERVER_REGISTRY_STATE_KEY] = normalized
+  await writeCodexGlobalStatePayload(payload)
+  cachedServerRegistryState = cloneServerRegistryState(normalized)
+}
+
+function buildServerIdSeed(value: string): string {
+  const lowered = value.toLowerCase().trim()
+  const collapsed = lowered
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+/g, '')
+    .replace(/-+$/g, '')
+  const candidate = collapsed.length > 0 ? collapsed : 'server'
+  const startsWithAlphaNum = /^[a-z0-9]/.test(candidate)
+  const withPrefix = startsWithAlphaNum ? candidate : `server-${candidate}`
+  return withPrefix.slice(0, MAX_SERVER_ID_LENGTH)
+}
+
+function buildUniqueServerId(seed: string, taken: Set<string>): string {
+  const normalizedSeed = buildServerIdSeed(seed)
+  if (isValidServerId(normalizedSeed) && !taken.has(normalizedSeed)) {
+    return normalizedSeed
+  }
+
+  let index = 2
+  while (index < 100_000) {
+    const suffix = `-${String(index)}`
+    const baseLength = Math.max(1, MAX_SERVER_ID_LENGTH - suffix.length)
+    const base = normalizedSeed.slice(0, baseLength)
+    const candidate = `${base}${suffix}`
+    if (isValidServerId(candidate) && !taken.has(candidate)) {
+      return candidate
+    }
+    index += 1
+  }
+
+  throw new Error('Failed to generate unique server id')
+}
+
+function parseServerResourceId(pathname: string): string | null {
+  const prefix = '/codex-api/servers/'
+  if (!pathname.startsWith(prefix)) return null
+  const encoded = pathname.slice(prefix.length)
+  if (encoded.length === 0 || encoded.includes('/')) return null
+  try {
+    return decodeURIComponent(encoded).trim()
+  } catch {
+    return null
+  }
+}
+
+function getSingleHeaderValue(header: string | string[] | undefined): string {
+  if (typeof header === 'string') return header.trim()
+  if (Array.isArray(header)) {
+    for (const value of header) {
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value.trim()
+      }
+    }
+  }
+  return ''
+}
+
+export function getRequestedServerId(req: IncomingMessage, url: URL): string | null {
+  const headerServerId = getSingleHeaderValue(req.headers['x-codex-server-id'])
+  if (headerServerId.length > 0) return headerServerId
+
+  const queryServerId = url.searchParams.get('serverId')?.trim() ?? ''
+  return queryServerId.length > 0 ? queryServerId : null
+}
+
+function isLoopbackRequest(req: IncomingMessage): boolean {
+  const remote = req.socket.remoteAddress ?? ''
+  return remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1'
+}
+
+function isTrustedLoopbackOrigin(req: IncomingMessage): boolean {
+  const originHeader = getSingleHeaderValue(req.headers.origin)
+  if (!originHeader) return true
+
+  try {
+    const origin = new URL(originHeader)
+    return origin.hostname === 'localhost'
+      || origin.hostname === '127.0.0.1'
+      || origin.hostname === '[::1]'
+      || origin.hostname === '::1'
+  } catch {
+    return false
+  }
+}
+
+function requireLoopbackForSensitiveMutation(req: IncomingMessage, action: string): void {
+  if (!isLoopbackRequest(req)) {
+    throw new BridgeHttpError(403, `${action} is only allowed from localhost`)
+  }
+  if (!isTrustedLoopbackOrigin(req)) {
+    throw new BridgeHttpError(403, `${action} rejected due to untrusted origin`)
+  }
+}
+
+function isPathInside(basePath: string, targetPath: string): boolean {
+  const base = resolve(basePath)
+  const target = resolve(targetPath)
+  if (base === target) return true
+  const rel = relative(base, target)
+  return rel.length > 0 && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
+}
+
+function ensurePathInside(basePath: string, targetPath: string, errorMessage: string): string {
+  const normalized = resolve(targetPath)
+  if (!isPathInside(basePath, normalized)) {
+    throw new BridgeHttpError(403, errorMessage)
+  }
+  return normalized
+}
+
 type ThreadTitleCache = { titles: Record<string, string>; order: string[] }
 const MAX_THREAD_TITLES = 500
 
@@ -471,17 +724,23 @@ async function writeWorkspaceRootsState(nextState: WorkspaceRootsState): Promise
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  const raw = await readRawBody(req)
+  const raw = await readRawBody(req, MAX_JSON_BODY_BYTES)
   if (raw.length === 0) return null
   const text = raw.toString('utf8').trim()
   if (text.length === 0) return null
   return JSON.parse(text) as unknown
 }
 
-async function readRawBody(req: IncomingMessage): Promise<Buffer> {
+async function readRawBody(req: IncomingMessage, maxBytes = MAX_JSON_BODY_BYTES): Promise<Buffer> {
   const chunks: Uint8Array[] = []
+  let totalBytes = 0
   for await (const chunk of req) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)
+    const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+    totalBytes += buffer.byteLength
+    if (totalBytes > maxBytes) {
+      throw new BridgeHttpError(413, `Request body too large (limit ${String(maxBytes)} bytes)`)
+    }
+    chunks.push(buffer)
   }
   return Buffer.concat(chunks)
 }
@@ -920,9 +1179,81 @@ type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: 
   dispose: () => void
 }
 
-type SharedBridgeState = {
+type ServerRuntime = {
   appServer: AppServerProcess
   methodCatalog: MethodCatalog
+}
+
+class AppServerRuntimeRegistry {
+  private readonly runtimes = new Map<string, ServerRuntime>()
+
+  getRuntime(serverId: string): ServerRuntime {
+    const existing = this.runtimes.get(serverId)
+    if (existing) return existing
+
+    const created: ServerRuntime = {
+      appServer: new AppServerProcess(),
+      methodCatalog: new MethodCatalog(),
+    }
+    this.runtimes.set(serverId, created)
+    return created
+  }
+
+  disposeServer(serverId: string): void {
+    const runtime = this.runtimes.get(serverId)
+    if (!runtime) return
+    runtime.appServer.dispose()
+    this.runtimes.delete(serverId)
+  }
+
+  disposeAll(): void {
+    for (const runtime of this.runtimes.values()) {
+      runtime.appServer.dispose()
+    }
+    this.runtimes.clear()
+  }
+}
+
+class BridgeHttpError extends Error {
+  readonly statusCode: number
+
+  constructor(statusCode: number, message: string) {
+    super(message)
+    this.statusCode = statusCode
+  }
+}
+
+type ResolvedServerRuntime = {
+  server: CodexServerRecord
+  runtime: ServerRuntime
+}
+
+async function resolveServerRuntime(
+  req: IncomingMessage,
+  url: URL,
+  runtimeRegistry: AppServerRuntimeRegistry,
+): Promise<ResolvedServerRuntime> {
+  const registryState = await readServerRegistryState()
+  const requestedServerId = getRequestedServerId(req, url)
+  const selectedServerId = requestedServerId ?? registryState.defaultServerId
+
+  if (!isValidServerId(selectedServerId)) {
+    throw new BridgeHttpError(400, `Invalid server id "${selectedServerId}"`)
+  }
+
+  const server = registryState.servers.find((item) => item.id === selectedServerId)
+  if (!server) {
+    throw new BridgeHttpError(404, `Unknown server id "${selectedServerId}"`)
+  }
+
+  return {
+    server,
+    runtime: runtimeRegistry.getRuntime(server.id),
+  }
+}
+
+type SharedBridgeState = {
+  runtimeRegistry: AppServerRuntimeRegistry
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
@@ -936,15 +1267,14 @@ function getSharedBridgeState(): SharedBridgeState {
   if (existing) return existing
 
   const created: SharedBridgeState = {
-    appServer: new AppServerProcess(),
-    methodCatalog: new MethodCatalog(),
+    runtimeRegistry: new AppServerRuntimeRegistry(),
   }
   globalScope[SHARED_BRIDGE_KEY] = created
   return created
 }
 
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
-  const { appServer, methodCatalog } = getSharedBridgeState()
+  const { runtimeRegistry } = getSharedBridgeState()
 
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     try {
@@ -954,8 +1284,172 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       const url = new URL(req.url, 'http://localhost')
+      const serverResourceId = parseServerResourceId(url.pathname)
+      if (url.pathname.startsWith('/codex-api/servers/') && serverResourceId === null) {
+        setJson(res, 400, { error: 'Invalid server resource path' })
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/servers') {
+        const state = await readServerRegistryState({ persistNormalized: true })
+        setJson(res, 200, { data: state })
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/servers') {
+        requireLoopbackForSensitiveMutation(req, 'Server registry updates')
+        const payload = asRecord(await readJsonBody(req))
+        if (!payload) {
+          setJson(res, 400, { error: 'Invalid body: expected object' })
+          return
+        }
+
+        const providedServerId = typeof payload.id === 'string' ? payload.id.trim() : ''
+        if (providedServerId.length > 0 && !isValidServerId(providedServerId)) {
+          setJson(res, 400, { error: `Invalid server id "${providedServerId}"` })
+          return
+        }
+
+        const providedName = typeof payload.name === 'string' ? payload.name.trim() : ''
+        const makeDefault = payload.isDefault === true || payload.makeDefault === true || payload.default === true
+        const state = await readServerRegistryState({ persistNormalized: true })
+        const existingIds = new Set(state.servers.map((server) => server.id))
+        if (providedServerId.length > 0 && existingIds.has(providedServerId)) {
+          setJson(res, 409, { error: `Server "${providedServerId}" already exists` })
+          return
+        }
+
+        const nextServerId = providedServerId.length > 0
+          ? providedServerId
+          : buildUniqueServerId(providedName || 'server', existingIds)
+        const nowIso = new Date().toISOString()
+        const nextServer: CodexServerRecord = {
+          id: nextServerId,
+          name: providedName.length > 0 ? providedName : `Server ${String(state.servers.length + 1)}`,
+          createdAtIso: nowIso,
+          updatedAtIso: nowIso,
+        }
+        const nextState: ServerRegistryState = {
+          defaultServerId: makeDefault ? nextServerId : state.defaultServerId,
+          servers: [...state.servers, nextServer],
+        }
+        await writeServerRegistryState(nextState)
+        setJson(res, 201, { data: { server: nextServer, registry: nextState } })
+        return
+      }
+
+      if (url.pathname === '/codex-api/servers') {
+        setJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
+      if (serverResourceId !== null && url.pathname !== '/codex-api/servers') {
+        if (!isValidServerId(serverResourceId)) {
+          setJson(res, 400, { error: `Invalid server id "${serverResourceId}"` })
+          return
+        }
+
+        if (req.method === 'GET') {
+          const state = await readServerRegistryState({ persistNormalized: true })
+          const server = state.servers.find((item) => item.id === serverResourceId)
+          if (!server) {
+            setJson(res, 404, { error: `Server "${serverResourceId}" not found` })
+            return
+          }
+          setJson(res, 200, { data: { ...server, isDefault: state.defaultServerId === server.id } })
+          return
+        }
+
+        if (req.method === 'PUT') {
+          requireLoopbackForSensitiveMutation(req, 'Server registry updates')
+          const payload = asRecord(await readJsonBody(req))
+          if (!payload) {
+            setJson(res, 400, { error: 'Invalid body: expected object' })
+            return
+          }
+          if ('name' in payload && typeof payload.name !== 'string') {
+            setJson(res, 400, { error: 'Invalid body: "name" must be a string' })
+            return
+          }
+
+          const state = await readServerRegistryState({ persistNormalized: true })
+          const serverIndex = state.servers.findIndex((item) => item.id === serverResourceId)
+          if (serverIndex === -1) {
+            setJson(res, 404, { error: `Server "${serverResourceId}" not found` })
+            return
+          }
+
+          const rawDefaultFlag = payload.isDefault ?? payload.makeDefault ?? payload.default
+          if (rawDefaultFlag !== undefined && typeof rawDefaultFlag !== 'boolean') {
+            setJson(res, 400, { error: 'Invalid body: "isDefault" must be a boolean' })
+            return
+          }
+
+          const nextName = typeof payload.name === 'string' && payload.name.trim().length > 0
+            ? payload.name.trim()
+            : state.servers[serverIndex].name
+          const updatedServer: CodexServerRecord = {
+            ...state.servers[serverIndex],
+            name: nextName,
+            updatedAtIso: new Date().toISOString(),
+          }
+          const nextServers = [...state.servers]
+          nextServers[serverIndex] = updatedServer
+
+          let nextDefaultServerId = state.defaultServerId
+          if (rawDefaultFlag === true) {
+            nextDefaultServerId = serverResourceId
+          } else if (rawDefaultFlag === false && state.defaultServerId === serverResourceId) {
+            setJson(res, 400, { error: 'Cannot unset default server without selecting another default' })
+            return
+          }
+
+          const nextState: ServerRegistryState = {
+            defaultServerId: nextDefaultServerId,
+            servers: nextServers,
+          }
+          await writeServerRegistryState(nextState)
+          setJson(res, 200, { data: { server: updatedServer, registry: nextState } })
+          return
+        }
+
+        if (req.method === 'DELETE') {
+          requireLoopbackForSensitiveMutation(req, 'Server registry updates')
+          const state = await readServerRegistryState({ persistNormalized: true })
+          const targetServer = state.servers.find((item) => item.id === serverResourceId)
+          if (!targetServer) {
+            setJson(res, 404, { error: `Server "${serverResourceId}" not found` })
+            return
+          }
+
+          const remainingServers = state.servers.filter((item) => item.id !== serverResourceId)
+          let nextDefaultServerId = state.defaultServerId
+          let nextServers = remainingServers
+
+          if (remainingServers.length === 0) {
+            const fallbackServer = createDefaultServerRecord(new Date().toISOString())
+            nextServers = [fallbackServer]
+            nextDefaultServerId = fallbackServer.id
+          } else if (state.defaultServerId === serverResourceId) {
+            nextDefaultServerId = remainingServers[0].id
+          }
+
+          const nextState: ServerRegistryState = {
+            defaultServerId: nextDefaultServerId,
+            servers: nextServers,
+          }
+          await writeServerRegistryState(nextState)
+          runtimeRegistry.disposeServer(serverResourceId)
+          setJson(res, 200, { ok: true, data: nextState })
+          return
+        }
+
+        setJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
 
       if (req.method === 'POST' && url.pathname === '/codex-api/rpc') {
+        const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
         const payload = await readJsonBody(req)
         const body = asRecord(payload) as RpcProxyRequest | null
 
@@ -964,7 +1458,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
-        const result = await appServer.rpc(body.method, body.params ?? null)
+        const result = await runtime.appServer.rpc(body.method, body.params ?? null)
         setJson(res, 200, { result })
         return
       }
@@ -976,7 +1470,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
-        const rawBody = await readRawBody(req)
+        const rawBody = await readRawBody(req, MAX_TRANSCRIBE_BODY_BYTES)
         const incomingCt = req.headers['content-type'] ?? 'application/octet-stream'
         const upstream = await proxyTranscribe(rawBody, incomingCt, auth.accessToken, auth.accountId)
 
@@ -987,25 +1481,29 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'POST' && url.pathname === '/codex-api/server-requests/respond') {
+        const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
         const payload = await readJsonBody(req)
-        await appServer.respondToServerRequest(payload)
+        await runtime.appServer.respondToServerRequest(payload)
         setJson(res, 200, { ok: true })
         return
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/server-requests/pending') {
-        setJson(res, 200, { data: appServer.listPendingServerRequests() })
+        const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+        setJson(res, 200, { data: runtime.appServer.listPendingServerRequests() })
         return
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/meta/methods') {
-        const methods = await methodCatalog.listMethods()
+        const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+        const methods = await runtime.methodCatalog.listMethods()
         setJson(res, 200, { data: methods })
         return
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/meta/notifications') {
-        const methods = await methodCatalog.listNotificationMethods()
+        const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+        const methods = await runtime.methodCatalog.listNotificationMethods()
         setJson(res, 200, { data: methods })
         return
       }
@@ -1034,6 +1532,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'POST' && url.pathname === '/codex-api/project-root') {
+        requireLoopbackForSensitiveMutation(req, 'Project root changes')
         const payload = asRecord(await readJsonBody(req))
         const rawPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
         const createIfMissing = payload?.createIfMissing === true
@@ -1044,6 +1543,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
 
         const normalizedPath = isAbsolute(rawPath) ? rawPath : resolve(rawPath)
+        const userHomePath = homedir()
         let pathExists = true
         try {
           const info = await stat(normalizedPath)
@@ -1056,6 +1556,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
 
         if (!pathExists && createIfMissing) {
+          ensurePathInside(userHomePath, normalizedPath, 'Refusing to create directories outside your home path')
           await mkdir(normalizedPath, { recursive: true })
         } else if (!pathExists) {
           setJson(res, 404, { error: 'Directory does not exist' })
@@ -1180,6 +1681,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'GET' && url.pathname === '/codex-api/skills-hub') {
         try {
+          const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
           const q = url.searchParams.get('q') || ''
           const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 200)
           const sort = url.searchParams.get('sort') || 'date'
@@ -1187,7 +1689,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
           const installedMap = await scanInstalledSkillsFromDisk()
           try {
-            const result = (await appServer.rpc('skills/list', {})) as { data?: Array<{ skills?: Array<{ name?: string; path?: string; enabled?: boolean }> }> }
+            const result = (await runtime.appServer.rpc('skills/list', {})) as { data?: Array<{ skills?: Array<{ name?: string; path?: string; enabled?: boolean }> }> }
             for (const entry of result.data ?? []) {
               for (const skill of entry.skills ?? []) {
                 if (skill.name) {
@@ -1239,6 +1741,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'POST' && url.pathname === '/codex-api/skills-hub/install') {
         try {
+          requireLoopbackForSensitiveMutation(req, 'Skills installation')
+          const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
           const payload = asRecord(await readJsonBody(req))
           const owner = typeof payload?.owner === 'string' ? payload.owner : ''
           const name = typeof payload?.name === 'string' ? payload.name : ''
@@ -1247,7 +1751,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             return
           }
           const installerScript = '/Users/igor/.cursor/skills/.system/skill-installer/scripts/install-skill-from-github.py'
-          const installDest = await detectUserSkillsDir(appServer)
+          const installDest = await detectUserSkillsDir(runtime.appServer)
           const skillPathInRepo = `skills/${owner}/${name}`
           await runCommand('python3', [
             installerScript,
@@ -1257,9 +1761,13 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             '--method', 'git',
           ])
           const skillDir = join(installDest, name)
-          await ensureInstalledSkillIsValid(appServer, skillDir)
+          await ensureInstalledSkillIsValid(runtime.appServer, skillDir)
           setJson(res, 200, { ok: true, path: skillDir })
         } catch (error) {
+          if (error instanceof BridgeHttpError) {
+            setJson(res, error.statusCode, { error: error.message })
+            return
+          }
           setJson(res, 502, { error: getErrorMessage(error, 'Failed to install skill') })
         }
         return
@@ -1267,40 +1775,58 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'POST' && url.pathname === '/codex-api/skills-hub/uninstall') {
         try {
+          requireLoopbackForSensitiveMutation(req, 'Skills uninstall')
+          const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
           const payload = asRecord(await readJsonBody(req))
           const name = typeof payload?.name === 'string' ? payload.name : ''
-          const path = typeof payload?.path === 'string' ? payload.path : ''
-          const target = path || (name ? join(getSkillsInstallDir(), name) : '')
-          if (!target) {
-            setJson(res, 400, { error: 'Missing name or path' })
+          const requestedPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
+          if (requestedPath.length > 0) {
+            setJson(res, 400, { error: 'Direct path uninstall is disabled. Use skill name only.' })
             return
           }
-          await rm(target, { recursive: true, force: true })
-          try { await appServer.rpc('skills/list', { forceReload: true }) } catch {}
-          setJson(res, 200, { ok: true, deletedPath: target })
+          if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name.trim())) {
+            setJson(res, 400, { error: 'Invalid skill name' })
+            return
+          }
+          const skillsRoot = resolve(getSkillsInstallDir())
+          const target = requestedPath || (name ? join(skillsRoot, name) : '')
+          if (!target) {
+            setJson(res, 400, { error: 'Missing skill name' })
+            return
+          }
+          const normalizedTarget = ensurePathInside(skillsRoot, target, 'Refusing to delete outside skills directory')
+          await rm(normalizedTarget, { recursive: true, force: true })
+          try { await runtime.appServer.rpc('skills/list', { forceReload: true }) } catch {}
+          setJson(res, 200, { ok: true, deletedPath: normalizedTarget })
         } catch (error) {
+          if (error instanceof BridgeHttpError) {
+            setJson(res, error.statusCode, { error: error.message })
+            return
+          }
           setJson(res, 502, { error: getErrorMessage(error, 'Failed to uninstall skill') })
         }
         return
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/events') {
+        const { runtime, server } = await resolveServerRuntime(req, url, runtimeRegistry)
         res.statusCode = 200
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
         res.setHeader('Cache-Control', 'no-cache, no-transform')
         res.setHeader('Connection', 'keep-alive')
         res.setHeader('X-Accel-Buffering', 'no')
 
-        const unsubscribe = appServer.onNotification((notification) => {
+        const unsubscribe = runtime.appServer.onNotification((notification) => {
           if (res.writableEnded || res.destroyed) return
           const payload = {
             ...notification,
+            serverId: server.id,
             atIso: new Date().toISOString(),
           }
           res.write(`data: ${JSON.stringify(payload)}\n\n`)
         })
 
-        res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`)
+        res.write(`event: ready\ndata: ${JSON.stringify({ ok: true, serverId: server.id })}\n\n`)
         const keepAlive = setInterval(() => {
           res.write(': ping\n\n')
         }, 15000)
@@ -1320,13 +1846,17 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       next()
     } catch (error) {
+      if (error instanceof BridgeHttpError) {
+        setJson(res, error.statusCode, { error: error.message })
+        return
+      }
       const message = getErrorMessage(error, 'Unknown bridge error')
       setJson(res, 502, { error: message })
     }
   }
 
   middleware.dispose = () => {
-    appServer.dispose()
+    runtimeRegistry.disposeAll()
   }
 
   return middleware

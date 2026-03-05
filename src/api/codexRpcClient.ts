@@ -4,7 +4,6 @@ import { CodexApiError, extractErrorMessage } from './codexErrors'
 type RpcRequestBody = {
   method: string
   params?: unknown
-  serverId?: string
 }
 
 type ScopedRequestOptions = {
@@ -31,13 +30,24 @@ function normalizeServerId(serverId?: string): string {
   return typeof serverId === 'string' ? serverId.trim() : ''
 }
 
-function withServerScope(path: string, serverId?: string): string {
+function buildServerScopedEventUrl(path: string, serverId?: string): string {
   const normalized = normalizeServerId(serverId)
   if (!normalized) return path
 
   const url = new URL(path, 'http://localhost')
   url.searchParams.set('serverId', normalized)
   return `${url.pathname}${url.search}`
+}
+
+function buildServerRoutingHeaders(
+  serverId: string,
+  headers: Record<string, string> = {},
+): Record<string, string> {
+  const nextHeaders: Record<string, string> = { ...headers }
+  if (serverId.length > 0) {
+    nextHeaders['x-codex-server-id'] = serverId
+  }
+  return nextHeaders
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -51,16 +61,15 @@ export async function rpcCall<T>(method: string, params?: unknown, options: Scop
   const body: RpcRequestBody = {
     method,
     params: params ?? null,
-    ...(scopedServerId ? { serverId: scopedServerId } : {}),
   }
 
   let response: Response
   try {
-    response = await fetch(withServerScope('/codex-api/rpc', scopedServerId), {
+    response = await fetch('/codex-api/rpc', {
       method: 'POST',
-      headers: {
+      headers: buildServerRoutingHeaders(scopedServerId, {
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify(body),
     })
   } catch (error) {
@@ -101,7 +110,9 @@ export async function rpcCall<T>(method: string, params?: unknown, options: Scop
 
 export async function fetchRpcMethodCatalog(options: ScopedRequestOptions = {}): Promise<string[]> {
   const scopedServerId = normalizeServerId(options.serverId)
-  const response = await fetch(withServerScope('/codex-api/meta/methods', scopedServerId))
+  const response = await fetch('/codex-api/meta/methods', {
+    headers: buildServerRoutingHeaders(scopedServerId),
+  })
 
   let payload: unknown = null
   try {
@@ -127,7 +138,9 @@ export async function fetchRpcMethodCatalog(options: ScopedRequestOptions = {}):
 
 export async function fetchRpcNotificationCatalog(options: ScopedRequestOptions = {}): Promise<string[]> {
   const scopedServerId = normalizeServerId(options.serverId)
-  const response = await fetch(withServerScope('/codex-api/meta/notifications', scopedServerId))
+  const response = await fetch('/codex-api/meta/notifications', {
+    headers: buildServerRoutingHeaders(scopedServerId),
+  })
 
   let payload: unknown = null
   try {
@@ -182,7 +195,7 @@ export function subscribeRpcNotifications(
   }
 
   const scopedServerId = normalizeServerId(options.serverId)
-  const source = new EventSource(withServerScope('/codex-api/events', scopedServerId))
+  const source = new EventSource(buildServerScopedEventUrl('/codex-api/events', scopedServerId))
 
   source.onmessage = (event) => {
     try {
@@ -203,16 +216,15 @@ export function subscribeRpcNotifications(
 
 export async function respondServerRequest(body: ServerRequestReplyBody, options: ScopedRequestOptions = {}): Promise<void> {
   const scopedServerId = normalizeServerId(options.serverId)
-  const requestBody = scopedServerId ? { ...body, serverId: scopedServerId } : body
 
   let response: Response
   try {
-    response = await fetch(withServerScope('/codex-api/server-requests/respond', scopedServerId), {
+    response = await fetch('/codex-api/server-requests/respond', {
       method: 'POST',
-      headers: {
+      headers: buildServerRoutingHeaders(scopedServerId, {
         'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
+      }),
+      body: JSON.stringify(body),
     })
   } catch (error) {
     throw new CodexApiError(
@@ -242,7 +254,9 @@ export async function respondServerRequest(body: ServerRequestReplyBody, options
 
 export async function fetchPendingServerRequests(options: ScopedRequestOptions = {}): Promise<unknown[]> {
   const scopedServerId = normalizeServerId(options.serverId)
-  const response = await fetch(withServerScope('/codex-api/server-requests/pending', scopedServerId))
+  const response = await fetch('/codex-api/server-requests/pending', {
+    headers: buildServerRoutingHeaders(scopedServerId),
+  })
 
   let payload: unknown = null
   try {

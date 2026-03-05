@@ -9,9 +9,9 @@ services:
     environment:
       CODEX_HOME: /root/.codex
     ports:
-      - "19101:9101"
+      - "127.0.0.1:19101:9101"
     volumes:
-      - ./auth/auth.json:/root/.codex/auth.json:ro
+      - ${CODEX_MULTI_SERVER_AUTH_FILE:-/tmp/codexui-multi-server-auth/auth.json}:/root/.codex/auth.json:ro
     healthcheck:
       test:
         [
@@ -30,9 +30,9 @@ services:
     environment:
       CODEX_HOME: /root/.codex
     ports:
-      - "19102:9102"
+      - "127.0.0.1:19102:9102"
     volumes:
-      - ./auth/auth.json:/root/.codex/auth.json:ro
+      - ${CODEX_MULTI_SERVER_AUTH_FILE:-/tmp/codexui-multi-server-auth/auth.json}:/root/.codex/auth.json:ro
     healthcheck:
       test:
         [

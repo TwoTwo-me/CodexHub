@@ -1,10 +1,12 @@
 FROM node:20-bookworm-slim
 
+ARG CODEX_CLI_VERSION=0.110.0
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates tini \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install --global @openai/codex@latest \
+RUN npm install --global @openai/codex@${CODEX_CLI_VERSION} \
   && npm cache clean --force
 
 ENV CODEX_HOME=/root/.codex

@@ -36,6 +36,11 @@ export type CodexServerInfo = {
   description: string
 }
 
+export type CodexServerDirectory = {
+  defaultServerId: string
+  servers: CodexServerInfo[]
+}
+
 let activeServerId = ''
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -48,8 +53,9 @@ function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function normalizeServerEntries(payload: unknown): CodexServerInfo[] {
+function normalizeServerEntries(payload: unknown): CodexServerDirectory {
   const root = asRecord(payload)
+  const defaultServerId = readString(root?.defaultServerId) || readString(root?.default_server_id)
   const rows = Array.isArray(payload)
     ? payload
     : Array.isArray(root?.servers)
@@ -77,7 +83,10 @@ function normalizeServerEntries(payload: unknown): CodexServerInfo[] {
     })
   }
 
-  return servers
+  return {
+    defaultServerId,
+    servers,
+  }
 }
 
 function scopedServerOptions(): { serverId?: string } {
@@ -92,7 +101,7 @@ export function getActiveServerId(): string {
   return activeServerId
 }
 
-export async function getCodexServers(): Promise<CodexServerInfo[]> {
+export async function getCodexServers(): Promise<CodexServerDirectory> {
   try {
     const payload = await fetchCodexServers()
     return normalizeServerEntries(payload)

@@ -652,10 +652,18 @@ function normalizeServerList(value: CodexServerInfo[]): CodexServerInfo[] {
   return next
 }
 
-function chooseServerId(availableServers: CodexServerInfo[], preferredServerId: string): string {
+function chooseServerId(
+  availableServers: CodexServerInfo[],
+  preferredServerId: string,
+  backendDefaultServerId = '',
+): string {
   const preferred = preferredServerId.trim()
   if (preferred && availableServers.some((server) => server.id === preferred)) {
     return preferred
+  }
+  const backendDefault = backendDefaultServerId.trim()
+  if (backendDefault && availableServers.some((server) => server.id === backendDefault)) {
+    return backendDefault
   }
   return availableServers[0]?.id ?? ''
 }
@@ -807,8 +815,11 @@ export function useDesktopState() {
 
   async function refreshServers(): Promise<void> {
     let nextServers = normalizeServerList(availableServers.value)
+    let backendDefaultServerId = ''
     try {
-      nextServers = normalizeServerList(await getCodexServers())
+      const directory = await getCodexServers()
+      backendDefaultServerId = directory.defaultServerId.trim()
+      nextServers = normalizeServerList(directory.servers)
     } catch {
       // Keep the last known list when the server directory endpoint is temporarily unavailable.
     }
@@ -820,7 +831,7 @@ export function useDesktopState() {
     availableServers.value = nextServers
 
     const preferredServerId = selectedServerId.value || loadSelectedServerId()
-    const nextServerId = chooseServerId(nextServers, preferredServerId)
+    const nextServerId = chooseServerId(nextServers, preferredServerId, backendDefaultServerId)
     setSelectedServerIdValue(nextServerId)
   }
 
