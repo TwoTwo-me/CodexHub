@@ -1,4 +1,10 @@
 import type { RpcEnvelope, RpcMethodCatalog } from '../types/codex'
+import {
+  RELAY_CHANNEL_ID_HEADER,
+  RELAY_HUB_CHANNEL,
+  RELAY_SERVER_ID_HEADER,
+  normalizeRelayChannelId,
+} from '../types/relayProtocol'
 import { CodexApiError, extractErrorMessage } from './codexErrors'
 
 type RpcRequestBody = {
@@ -8,6 +14,7 @@ type RpcRequestBody = {
 
 type ScopedRequestOptions = {
   serverId?: string
+  channelId?: string
 }
 
 export type RpcNotification = {
@@ -15,6 +22,7 @@ export type RpcNotification = {
   params: unknown
   atIso: string
   serverId: string
+  channelId: string
 }
 
 type ServerRequestReplyBody = {
@@ -30,22 +38,37 @@ function normalizeServerId(serverId?: string): string {
   return typeof serverId === 'string' ? serverId.trim() : ''
 }
 
-function buildServerScopedEventUrl(path: string, serverId?: string): string {
+function normalizeChannelId(channelId?: string): string {
+  if (typeof channelId !== 'string') return RELAY_HUB_CHANNEL
+  return normalizeRelayChannelId(channelId)
+}
+
+function buildServerScopedEventUrl(path: string, serverId?: string, channelId?: string): string {
   const normalized = normalizeServerId(serverId)
-  if (!normalized) return path
+  const normalizedChannelId = normalizeChannelId(channelId)
+  if (!normalized && normalizedChannelId === RELAY_HUB_CHANNEL) return path
 
   const url = new URL(path, 'http://localhost')
-  url.searchParams.set('serverId', normalized)
+  if (normalized) {
+    url.searchParams.set('serverId', normalized)
+  }
+  if (normalizedChannelId !== RELAY_HUB_CHANNEL) {
+    url.searchParams.set('channelId', normalizedChannelId)
+  }
   return `${url.pathname}${url.search}`
 }
 
 function buildServerRoutingHeaders(
   serverId: string,
+  channelId: string,
   headers: Record<string, string> = {},
 ): Record<string, string> {
   const nextHeaders: Record<string, string> = { ...headers }
   if (serverId.length > 0) {
-    nextHeaders['x-codex-server-id'] = serverId
+    nextHeaders[RELAY_SERVER_ID_HEADER] = serverId
+  }
+  if (channelId !== RELAY_HUB_CHANNEL) {
+    nextHeaders[RELAY_CHANNEL_ID_HEADER] = channelId
   }
   return nextHeaders
 }
@@ -58,6 +81,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 export async function rpcCall<T>(method: string, params?: unknown, options: ScopedRequestOptions = {}): Promise<T> {
   const scopedServerId = normalizeServerId(options.serverId)
+  const scopedChannelId = normalizeChannelId(options.channelId)
   const body: RpcRequestBody = {
     method,
     params: params ?? null,
@@ -67,7 +91,7 @@ export async function rpcCall<T>(method: string, params?: unknown, options: Scop
   try {
     response = await fetch('/codex-api/rpc', {
       method: 'POST',
-      headers: buildServerRoutingHeaders(scopedServerId, {
+      headers: buildServerRoutingHeaders(scopedServerId, scopedChannelId, {
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(body),
@@ -110,8 +134,9 @@ export async function rpcCall<T>(method: string, params?: unknown, options: Scop
 
 export async function fetchRpcMethodCatalog(options: ScopedRequestOptions = {}): Promise<string[]> {
   const scopedServerId = normalizeServerId(options.serverId)
+  const scopedChannelId = normalizeChannelId(options.channelId)
   const response = await fetch('/codex-api/meta/methods', {
-    headers: buildServerRoutingHeaders(scopedServerId),
+    headers: buildServerRoutingHeaders(scopedServerId, scopedChannelId),
   })
 
   let payload: unknown = null
@@ -138,8 +163,9 @@ export async function fetchRpcMethodCatalog(options: ScopedRequestOptions = {}):
 
 export async function fetchRpcNotificationCatalog(options: ScopedRequestOptions = {}): Promise<string[]> {
   const scopedServerId = normalizeServerId(options.serverId)
+  const scopedChannelId = normalizeChannelId(options.channelId)
   const response = await fetch('/codex-api/meta/notifications', {
-    headers: buildServerRoutingHeaders(scopedServerId),
+    headers: buildServerRoutingHeaders(scopedServerId, scopedChannelId),
   })
 
   let payload: unknown = null
@@ -164,7 +190,7 @@ export async function fetchRpcNotificationCatalog(options: ScopedRequestOptions 
   return Array.isArray(catalog.data) ? catalog.data : []
 }
 
-function toNotification(value: unknown, fallbackServerId = ''): RpcNotification | null {
+function toNotification(value: unknown, fallbackServerId = '', fallbackChannelId: string = RELAY_HUB_CHANNEL): RpcNotification | null {
   const record = asRecord(value)
   if (!record) return null
   if (typeof record.method !== 'string' || record.method.length === 0) return null
@@ -183,6 +209,12 @@ function toNotification(value: unknown, fallbackServerId = ''): RpcNotification 
         : typeof record.server_id === 'string' && record.server_id.length > 0
           ? record.server_id
           : fallbackServerId) || '',
+    channelId:
+      (typeof record.channelId === 'string' && record.channelId.length > 0
+        ? record.channelId
+        : typeof record.channel_id === 'string' && record.channel_id.length > 0
+          ? record.channel_id
+          : fallbackChannelId) || RELAY_HUB_CHANNEL,
   }
 }
 
@@ -195,12 +227,13 @@ export function subscribeRpcNotifications(
   }
 
   const scopedServerId = normalizeServerId(options.serverId)
-  const source = new EventSource(buildServerScopedEventUrl('/codex-api/events', scopedServerId))
+  const scopedChannelId = normalizeChannelId(options.channelId)
+  const source = new EventSource(buildServerScopedEventUrl('/codex-api/events', scopedServerId, scopedChannelId))
 
   source.onmessage = (event) => {
     try {
       const parsed = JSON.parse(event.data) as unknown
-      const notification = toNotification(parsed, scopedServerId)
+      const notification = toNotification(parsed, scopedServerId, scopedChannelId)
       if (notification) {
         onNotification(notification)
       }
@@ -216,12 +249,13 @@ export function subscribeRpcNotifications(
 
 export async function respondServerRequest(body: ServerRequestReplyBody, options: ScopedRequestOptions = {}): Promise<void> {
   const scopedServerId = normalizeServerId(options.serverId)
+  const scopedChannelId = normalizeChannelId(options.channelId)
 
   let response: Response
   try {
     response = await fetch('/codex-api/server-requests/respond', {
       method: 'POST',
-      headers: buildServerRoutingHeaders(scopedServerId, {
+      headers: buildServerRoutingHeaders(scopedServerId, scopedChannelId, {
         'Content-Type': 'application/json',
       }),
       body: JSON.stringify(body),
@@ -254,8 +288,9 @@ export async function respondServerRequest(body: ServerRequestReplyBody, options
 
 export async function fetchPendingServerRequests(options: ScopedRequestOptions = {}): Promise<unknown[]> {
   const scopedServerId = normalizeServerId(options.serverId)
+  const scopedChannelId = normalizeChannelId(options.channelId)
   const response = await fetch('/codex-api/server-requests/pending', {
-    headers: buildServerRoutingHeaders(scopedServerId),
+    headers: buildServerRoutingHeaders(scopedServerId, scopedChannelId),
   })
 
   let payload: unknown = null
