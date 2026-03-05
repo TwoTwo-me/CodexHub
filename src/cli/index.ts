@@ -116,7 +116,20 @@ function openBrowser(url: string): void {
   child.unref()
 }
 
-function listenWithFallback(server: ReturnType<typeof createServer>, startPort: number): Promise<number> {
+function resolveBindHost(explicitHost: string | undefined): string {
+  const envHost = process.env.CODEXUI_BIND_HOST?.trim()
+  const provided = explicitHost?.trim()
+  if (provided && provided.length > 0) return provided
+  if (envHost && envHost.length > 0) return envHost
+  return '127.0.0.1'
+}
+
+function getPrimaryLocalUrl(host: string, port: number): string {
+  const displayHost = host === '0.0.0.0' || host === '::' ? 'localhost' : host
+  return `http://${displayHost}:${String(port)}`
+}
+
+function listenWithFallback(server: ReturnType<typeof createServer>, startPort: number, host: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const attempt = (port: number) => {
       const onError = (error: NodeJS.ErrnoException) => {
@@ -134,14 +147,14 @@ function listenWithFallback(server: ReturnType<typeof createServer>, startPort: 
 
       server.once('error', onError)
       server.once('listening', onListening)
-      server.listen(port)
+      server.listen(port, host)
     }
 
     attempt(startPort)
   })
 }
 
-async function startServer(options: { port: string; password: string | boolean }) {
+async function startServer(options: { port: string; host?: string; password: string | boolean }) {
   const version = await readCliVersion()
   const codexCommand = ensureTermuxCodexInstalled() ?? resolveCodexCommand()
   if (!hasCodexAuth() && codexCommand) {
@@ -149,16 +162,18 @@ async function startServer(options: { port: string; password: string | boolean }
     runOrFail(codexCommand, ['login'], 'Codex login')
   }
   const requestedPort = parseInt(options.port, 10)
+  const host = resolveBindHost(options.host)
   const password = resolvePassword(options.password)
   const { app, dispose } = createApp({ password })
   const server = createServer(app)
-  const port = await listenWithFallback(server, requestedPort)
+  const port = await listenWithFallback(server, requestedPort, host)
+  const localUrl = getPrimaryLocalUrl(host, port)
   const lines = [
     '',
     'Codex Web Local is running!',
     `  Version:  ${version}`,
     '',
-    `  Local:    http://localhost:${String(port)}`,
+    `  Local:    ${localUrl}`,
   ]
 
   if (port !== requestedPort) {
@@ -170,11 +185,15 @@ async function startServer(options: { port: string; password: string | boolean }
     lines.push(`  Password: ${password}`)
   }
 
+  if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
+    lines.push(`  Bound host: ${host}`)
+  }
+
   printTermuxKeepAlive(lines)
 
   lines.push('')
   console.log(lines.join('\n'))
-  openBrowser(`http://localhost:${String(port)}`)
+  openBrowser(localUrl)
 
   function shutdown() {
     console.log('\nShutting down...')
@@ -201,9 +220,10 @@ async function runLogin() {
 
 program
   .option('-p, --port <port>', 'port to listen on', '3000')
+  .option('--host <host>', 'host/interface to bind (default: 127.0.0.1 or CODEXUI_BIND_HOST)')
   .option('--password <pass>', 'set a specific password')
   .option('--no-password', 'disable password protection')
-  .action(async (opts: { port: string; password: string | boolean }) => {
+  .action(async (opts: { port: string; host?: string; password: string | boolean }) => {
     await startServer(opts)
   })
 

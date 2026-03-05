@@ -190,7 +190,7 @@ async function writeStateToDisk(nextState: UserStoreState): Promise<void> {
   await mkdir(dirname(storePath), { recursive: true })
   const payload = JSON.stringify(nextState, null, 2)
   const tempPath = `${storePath}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(tempPath, payload, 'utf8')
+  await writeFile(tempPath, payload, { encoding: 'utf8', mode: 0o600 })
   await rename(tempPath, storePath)
 }
 

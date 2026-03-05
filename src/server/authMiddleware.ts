@@ -17,6 +17,14 @@ const TOKEN_COOKIE = 'codex_web_local_token'
 const MAX_JSON_BODY_BYTES = 64 * 1024
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 const DEFAULT_BOOTSTRAP_ADMIN_USERNAME = 'admin'
+const RATE_LIMIT_MAX_ENTRIES = 4096
+const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+const LOGIN_RATE_LIMIT_BLOCK_MS = 15 * 60 * 1000
+const LOGIN_RATE_LIMIT_MAX_PER_IP = 30
+const LOGIN_RATE_LIMIT_MAX_PER_USERNAME = 10
+const SIGNUP_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
+const SIGNUP_RATE_LIMIT_BLOCK_MS = 15 * 60 * 1000
+const SIGNUP_RATE_LIMIT_MAX_PER_IP = 20
 
 type AuthMiddlewareOptions = {
   bootstrapAdminPassword: string
@@ -26,6 +34,12 @@ type AuthMiddlewareOptions = {
 type SessionRecord = {
   userId: string
   expiresAtMs: number
+}
+
+type RateLimitRecord = {
+  attempts: number
+  windowStartedAtMs: number
+  blockedUntilMs: number
 }
 
 function isLocalhostRequest(req: Request): boolean {
@@ -47,6 +61,108 @@ function parseCookies(header: string | undefined): Record<string, string> {
     cookies[key] = value
   }
   return cookies
+}
+
+function getRemoteAddress(req: Request): string {
+  const remote = req.socket.remoteAddress
+  if (typeof remote === 'string' && remote.trim().length > 0) {
+    return remote.trim()
+  }
+  return 'unknown'
+}
+
+function normalizeRateLimitKey(value: string): string {
+  const trimmed = value.trim().toLowerCase()
+  return trimmed.length > 0 ? trimmed : 'unknown'
+}
+
+function compactRateLimitMap(records: Map<string, RateLimitRecord>, nowMs: number, staleAfterMs: number): void {
+  if (records.size < RATE_LIMIT_MAX_ENTRIES) {
+    return
+  }
+
+  for (const [key, record] of records.entries()) {
+    const lastRelevantMs = Math.max(record.windowStartedAtMs, record.blockedUntilMs)
+    if (nowMs - lastRelevantMs > staleAfterMs) {
+      records.delete(key)
+    }
+  }
+}
+
+function evaluateRateLimit(
+  records: Map<string, RateLimitRecord>,
+  key: string,
+  options: { maxAttempts: number; windowMs: number; blockMs: number },
+  nowMs = Date.now(),
+): { limited: boolean; retryAfterSeconds: number } {
+  compactRateLimitMap(records, nowMs, options.windowMs + options.blockMs)
+
+  const existing = records.get(key)
+  if (!existing) {
+    return { limited: false, retryAfterSeconds: 0 }
+  }
+
+  if (existing.blockedUntilMs > nowMs) {
+    return {
+      limited: true,
+      retryAfterSeconds: Math.max(1, Math.ceil((existing.blockedUntilMs - nowMs) / 1000)),
+    }
+  }
+
+  if (nowMs - existing.windowStartedAtMs > options.windowMs) {
+    records.set(key, {
+      attempts: 0,
+      windowStartedAtMs: nowMs,
+      blockedUntilMs: 0,
+    })
+    return { limited: false, retryAfterSeconds: 0 }
+  }
+
+  if (existing.attempts >= options.maxAttempts) {
+    const blockedUntilMs = nowMs + options.blockMs
+    records.set(key, {
+      ...existing,
+      blockedUntilMs,
+    })
+    return {
+      limited: true,
+      retryAfterSeconds: Math.max(1, Math.ceil((blockedUntilMs - nowMs) / 1000)),
+    }
+  }
+
+  return { limited: false, retryAfterSeconds: 0 }
+}
+
+function incrementRateLimitAttempt(
+  records: Map<string, RateLimitRecord>,
+  key: string,
+  options: { windowMs: number },
+  nowMs = Date.now(),
+): void {
+  compactRateLimitMap(records, nowMs, options.windowMs)
+  const existing = records.get(key)
+  if (!existing || nowMs - existing.windowStartedAtMs > options.windowMs) {
+    records.set(key, {
+      attempts: 1,
+      windowStartedAtMs: nowMs,
+      blockedUntilMs: 0,
+    })
+    return
+  }
+
+  records.set(key, {
+    ...existing,
+    attempts: existing.attempts + 1,
+  })
+}
+
+function clearRateLimit(records: Map<string, RateLimitRecord>, key: string): void {
+  records.delete(key)
+}
+
+function writeRateLimitedResponse(res: Response, retryAfterSeconds: number, message: string): void {
+  res.setHeader('Retry-After', String(retryAfterSeconds))
+  res.status(429).json({ error: message, retryAfterSeconds })
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -195,6 +311,9 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
       : DEFAULT_BOOTSTRAP_ADMIN_USERNAME)
 
   const sessionStore = new Map<string, SessionRecord>()
+  const loginRateLimitByIp = new Map<string, RateLimitRecord>()
+  const loginRateLimitByUsername = new Map<string, RateLimitRecord>()
+  const signupRateLimitByIp = new Map<string, RateLimitRecord>()
   const bootstrapPromise = upsertBootstrapAdmin(bootstrapAdminUsername, options.bootstrapAdminPassword)
 
   async function resolveSessionUser(req: Request): Promise<UserProfile | null> {
@@ -240,6 +359,26 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
     res: Response,
     currentUser: UserProfile | null,
   ): Promise<void> {
+    const remoteAddressKey = normalizeRateLimitKey(getRemoteAddress(req))
+    const signupLimitDecision = evaluateRateLimit(
+      signupRateLimitByIp,
+      remoteAddressKey,
+      {
+        maxAttempts: SIGNUP_RATE_LIMIT_MAX_PER_IP,
+        windowMs: SIGNUP_RATE_LIMIT_WINDOW_MS,
+        blockMs: SIGNUP_RATE_LIMIT_BLOCK_MS,
+      },
+    )
+    if (signupLimitDecision.limited) {
+      writeRateLimitedResponse(res, signupLimitDecision.retryAfterSeconds, 'Too many signup attempts. Try again later.')
+      return
+    }
+    incrementRateLimitAttempt(
+      signupRateLimitByIp,
+      remoteAddressKey,
+      { windowMs: SIGNUP_RATE_LIMIT_WINDOW_MS },
+    )
+
     const body = await readJsonBody(req)
     if (!body) {
       res.status(400).json({ error: 'Invalid body: expected object' })
@@ -294,6 +433,40 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
       return
     }
 
+    const remoteAddressKey = normalizeRateLimitKey(getRemoteAddress(req))
+    const usernameKey = normalizeRateLimitKey(username || bootstrapAdminUsername)
+    const ipLimitDecision = evaluateRateLimit(
+      loginRateLimitByIp,
+      remoteAddressKey,
+      {
+        maxAttempts: LOGIN_RATE_LIMIT_MAX_PER_IP,
+        windowMs: LOGIN_RATE_LIMIT_WINDOW_MS,
+        blockMs: LOGIN_RATE_LIMIT_BLOCK_MS,
+      },
+    )
+    if (ipLimitDecision.limited) {
+      writeRateLimitedResponse(res, ipLimitDecision.retryAfterSeconds, 'Too many login attempts from this IP. Try again later.')
+      return
+    }
+
+    const usernameLimitDecision = evaluateRateLimit(
+      loginRateLimitByUsername,
+      usernameKey,
+      {
+        maxAttempts: LOGIN_RATE_LIMIT_MAX_PER_USERNAME,
+        windowMs: LOGIN_RATE_LIMIT_WINDOW_MS,
+        blockMs: LOGIN_RATE_LIMIT_BLOCK_MS,
+      },
+    )
+    if (usernameLimitDecision.limited) {
+      writeRateLimitedResponse(
+        res,
+        usernameLimitDecision.retryAfterSeconds,
+        'Too many login attempts for this account. Try again later.',
+      )
+      return
+    }
+
     const usernameCandidates = username
       ? [username]
       : [bootstrapAdminUsername]
@@ -315,9 +488,22 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
     }
 
     if (!signedInUser) {
+      incrementRateLimitAttempt(
+        loginRateLimitByIp,
+        remoteAddressKey,
+        { windowMs: LOGIN_RATE_LIMIT_WINDOW_MS },
+      )
+      incrementRateLimitAttempt(
+        loginRateLimitByUsername,
+        usernameKey,
+        { windowMs: LOGIN_RATE_LIMIT_WINDOW_MS },
+      )
       res.status(401).json({ error: 'Invalid credentials' })
       return
     }
+
+    clearRateLimit(loginRateLimitByIp, remoteAddressKey)
+    clearRateLimit(loginRateLimitByUsername, usernameKey)
 
     const token = createSession(signedInUser.id)
     res.setHeader('Set-Cookie', buildSessionCookie(req, token))
