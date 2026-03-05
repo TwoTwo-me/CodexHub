@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { getRequestAuthScopeKey, getRequestAuthenticatedUser } from './requestAuthContext.js'
+import { OutboundRelayHub, RelayHubError } from './relay/relayHub.js'
 import { listUsers } from './userStore.js'
 
 type JsonRpcCall = {
@@ -1383,8 +1384,9 @@ class BridgeHttpError extends Error {
 }
 
 type ResolvedServerRuntime = {
+  scope: ServerRegistryScope
   server: CodexServerRecord
-  runtime: ServerRuntime
+  runtime: ServerRuntime | null
 }
 
 async function resolveServerRuntime(
@@ -1407,13 +1409,26 @@ async function resolveServerRuntime(
   }
 
   return {
+    scope,
     server,
-    runtime: runtimeRegistry.getRuntime(scope.cacheKey, server.id),
+    runtime: server.transport === 'relay' ? null : runtimeRegistry.getRuntime(scope.cacheKey, server.id),
   }
+}
+
+function requireLocalRuntime(resolved: ResolvedServerRuntime, featureName: string): ServerRuntime {
+  if (!resolved.runtime) {
+    throw new BridgeHttpError(409, `${featureName} is not available for relay transport servers`)
+  }
+  return resolved.runtime
+}
+
+function mapRelayHubErrorToBridgeError(error: RelayHubError): BridgeHttpError {
+  return new BridgeHttpError(error.statusCode, error.message)
 }
 
 type SharedBridgeState = {
   runtimeRegistry: AppServerRuntimeRegistry
+  relayHub: OutboundRelayHub
 }
 
 const SHARED_BRIDGE_KEY = '__codexRemoteSharedBridge__'
@@ -1428,6 +1443,7 @@ function getSharedBridgeState(): SharedBridgeState {
 
   const created: SharedBridgeState = {
     runtimeRegistry: new AppServerRuntimeRegistry(),
+    relayHub: new OutboundRelayHub(),
   }
   globalScope[SHARED_BRIDGE_KEY] = created
   return created
@@ -1544,8 +1560,36 @@ function resolveUpdatedServerTransportConfig(
   }
 }
 
+function requireAdminUser(req: IncomingMessage): { id: string; username: string } {
+  const user = getRequestAuthenticatedUser(req)
+  if (!user) {
+    throw new BridgeHttpError(401, 'Authentication required')
+  }
+  if (user.role !== 'admin') {
+    throw new BridgeHttpError(403, 'Admin role required')
+  }
+  return {
+    id: user.id,
+    username: user.username,
+  }
+}
+
+function readBearerToken(req: IncomingMessage): string {
+  const authorization = req.headers.authorization
+  if (!authorization || typeof authorization !== 'string') {
+    return ''
+  }
+
+  const [scheme, token] = authorization.split(/\s+/u, 2)
+  if (!scheme || !token || scheme.toLowerCase() !== 'bearer') {
+    return ''
+  }
+
+  return token.trim()
+}
+
 export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
-  const { runtimeRegistry } = getSharedBridgeState()
+  const { runtimeRegistry, relayHub } = getSharedBridgeState()
 
   const middleware = async (req: IncomingMessage, res: ServerResponse, next: () => void) => {
     try {
@@ -1580,6 +1624,80 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (url.pathname === '/codex-api/admin/users') {
+        setJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/relay/agents') {
+        requireAdminUser(req)
+        setJson(res, 200, { data: relayHub.listAgents() })
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/relay/agents') {
+        requireLoopbackForSensitiveMutation(req, 'Relay agent provisioning')
+        requireAdminUser(req)
+        const payload = asRecord(await readJsonBody(req))
+        const name = typeof payload?.name === 'string' ? payload.name : undefined
+        const created = relayHub.createAgent(name)
+        setJson(res, 201, { data: created })
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/relay/agent/connect') {
+        try {
+          const token = readBearerToken(req)
+          const connected = relayHub.connectWithToken(token)
+          setJson(res, 200, { data: connected })
+          return
+        } catch (error) {
+          if (error instanceof RelayHubError) {
+            throw mapRelayHubErrorToBridgeError(error)
+          }
+          throw error
+        }
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/relay/agent/pull') {
+        try {
+          const sessionId = url.searchParams.get('sessionId')?.trim() ?? ''
+          if (!sessionId) {
+            setJson(res, 400, { error: 'Missing sessionId' })
+            return
+          }
+          const waitMs = url.searchParams.get('waitMs')
+          const messages = await relayHub.pullMessages(sessionId, waitMs === null ? undefined : Number(waitMs))
+          setJson(res, 200, { data: { messages } })
+          return
+        } catch (error) {
+          if (error instanceof RelayHubError) {
+            throw mapRelayHubErrorToBridgeError(error)
+          }
+          throw error
+        }
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/relay/agent/push') {
+        try {
+          const sessionId = url.searchParams.get('sessionId')?.trim() ?? ''
+          if (!sessionId) {
+            setJson(res, 400, { error: 'Missing sessionId' })
+            return
+          }
+          const payload = asRecord(await readJsonBody(req))
+          const messages = Array.isArray(payload?.messages) ? payload.messages : []
+          const result = relayHub.pushMessages(sessionId, messages)
+          setJson(res, 200, { data: result })
+          return
+        } catch (error) {
+          if (error instanceof RelayHubError) {
+            throw mapRelayHubErrorToBridgeError(error)
+          }
+          throw error
+        }
+      }
+
+      if (url.pathname.startsWith('/codex-api/relay/')) {
         setJson(res, 405, { error: 'Method not allowed' })
         return
       }
@@ -1758,7 +1876,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'POST' && url.pathname === '/codex-api/rpc') {
-        const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+        const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
         const payload = await readJsonBody(req)
         const body = asRecord(payload) as RpcProxyRequest | null
 
@@ -1767,6 +1885,34 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
+        if (resolved.server.transport === 'relay') {
+          const relayConfig = resolved.server.relay
+          if (!relayConfig) {
+            setJson(res, 503, { error: `Relay server "${resolved.server.id}" is missing relay configuration` })
+            return
+          }
+          try {
+            const result = await relayHub.dispatchRpc(
+              {
+                scopeKey: resolved.scope.cacheKey,
+                serverId: resolved.server.id,
+                agentId: relayConfig.agentId,
+              },
+              body.method,
+              body.params ?? null,
+              relayConfig.requestTimeoutMs,
+            )
+            setJson(res, 200, { result })
+            return
+          } catch (error) {
+            if (error instanceof RelayHubError) {
+              throw mapRelayHubErrorToBridgeError(error)
+            }
+            throw error
+          }
+        }
+
+        const runtime = requireLocalRuntime(resolved, 'RPC proxy')
         const result = await runtime.appServer.rpc(body.method, body.params ?? null)
         setJson(res, 200, { result })
         return
@@ -1790,7 +1936,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'POST' && url.pathname === '/codex-api/server-requests/respond') {
-        const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+        const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+        const runtime = requireLocalRuntime(resolved, 'Server request replies')
         const payload = await readJsonBody(req)
         await runtime.appServer.respondToServerRequest(payload)
         setJson(res, 200, { ok: true })
@@ -1798,20 +1945,35 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/server-requests/pending') {
-        const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+        const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+        if (resolved.server.transport === 'relay') {
+          setJson(res, 200, { data: [] })
+          return
+        }
+        const runtime = requireLocalRuntime(resolved, 'Pending server requests')
         setJson(res, 200, { data: runtime.appServer.listPendingServerRequests() })
         return
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/meta/methods') {
-        const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+        const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+        if (resolved.server.transport === 'relay') {
+          setJson(res, 200, { data: [] })
+          return
+        }
+        const runtime = requireLocalRuntime(resolved, 'Method catalog')
         const methods = await runtime.methodCatalog.listMethods()
         setJson(res, 200, { data: methods })
         return
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/meta/notifications') {
-        const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+        const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+        if (resolved.server.transport === 'relay') {
+          setJson(res, 200, { data: [] })
+          return
+        }
+        const runtime = requireLocalRuntime(resolved, 'Notification catalog')
         const methods = await runtime.methodCatalog.listNotificationMethods()
         setJson(res, 200, { data: methods })
         return
@@ -1990,7 +2152,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'GET' && url.pathname === '/codex-api/skills-hub') {
         try {
-          const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+          const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+          const runtime = requireLocalRuntime(resolved, 'Skills hub')
           const q = url.searchParams.get('q') || ''
           const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 200)
           const sort = url.searchParams.get('sort') || 'date'
@@ -2051,7 +2214,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'POST' && url.pathname === '/codex-api/skills-hub/install') {
         try {
           requireLoopbackForSensitiveMutation(req, 'Skills installation')
-          const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+          const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+          const runtime = requireLocalRuntime(resolved, 'Skills installation')
           const payload = asRecord(await readJsonBody(req))
           const owner = typeof payload?.owner === 'string' ? payload.owner : ''
           const name = typeof payload?.name === 'string' ? payload.name : ''
@@ -2085,7 +2249,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'POST' && url.pathname === '/codex-api/skills-hub/uninstall') {
         try {
           requireLoopbackForSensitiveMutation(req, 'Skills uninstall')
-          const { runtime } = await resolveServerRuntime(req, url, runtimeRegistry)
+          const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+          const runtime = requireLocalRuntime(resolved, 'Skills uninstall')
           const payload = asRecord(await readJsonBody(req))
           const name = typeof payload?.name === 'string' ? payload.name : ''
           const requestedPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
@@ -2118,22 +2283,41 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/events') {
-        const { runtime, server } = await resolveServerRuntime(req, url, runtimeRegistry)
+        const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+        const server = resolved.server
         res.statusCode = 200
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
         res.setHeader('Cache-Control', 'no-cache, no-transform')
         res.setHeader('Connection', 'keep-alive')
         res.setHeader('X-Accel-Buffering', 'no')
 
-        const unsubscribe = runtime.appServer.onNotification((notification) => {
-          if (res.writableEnded || res.destroyed) return
-          const payload = {
-            ...notification,
-            serverId: server.id,
-            atIso: new Date().toISOString(),
-          }
-          res.write(`data: ${JSON.stringify(payload)}\n\n`)
-        })
+        const unsubscribe = server.transport === 'relay'
+          ? relayHub.subscribeNotifications(
+              {
+                scopeKey: resolved.scope.cacheKey,
+                serverId: server.id,
+              },
+              (notification) => {
+                if (res.writableEnded || res.destroyed) return
+                const payload = {
+                  method: notification.event,
+                  params: notification.params,
+                  serverId: server.id,
+                  channelId: notification.route.channelId,
+                  atIso: notification.sentAtIso,
+                }
+                res.write(`data: ${JSON.stringify(payload)}\n\n`)
+              },
+            )
+          : requireLocalRuntime(resolved, 'Event stream').appServer.onNotification((notification) => {
+              if (res.writableEnded || res.destroyed) return
+              const payload = {
+                ...notification,
+                serverId: server.id,
+                atIso: new Date().toISOString(),
+              }
+              res.write(`data: ${JSON.stringify(payload)}\n\n`)
+            })
 
         res.write(`event: ready\ndata: ${JSON.stringify({ ok: true, serverId: server.id })}\n\n`)
         const keepAlive = setInterval(() => {

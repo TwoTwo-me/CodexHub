@@ -209,6 +209,19 @@ function shouldReturnJsonForUnauthorized(req: Request): boolean {
   return false
 }
 
+function isPublicRelayAgentPath(path: string, method: string): boolean {
+  if (method === 'POST' && path === '/codex-api/relay/agent/connect') {
+    return true
+  }
+  if (method === 'GET' && path === '/codex-api/relay/agent/pull') {
+    return true
+  }
+  if (method === 'POST' && path === '/codex-api/relay/agent/push') {
+    return true
+  }
+  return false
+}
+
 async function readJsonBody(req: Request): Promise<Record<string, unknown> | null> {
   const chunks: Uint8Array[] = []
   let totalBytes = 0
@@ -563,6 +576,11 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
     }
 
     if (currentUser) {
+      next()
+      return
+    }
+
+    if (isPublicRelayAgentPath(path, req.method.toUpperCase())) {
       next()
       return
     }

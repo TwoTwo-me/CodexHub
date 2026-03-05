@@ -1,0 +1,439 @@
+import { createHash, randomBytes } from 'node:crypto'
+import {
+  RELAY_HUB_CHANNEL,
+  RELAY_PROTOCOL,
+  RELAY_PROTOCOL_VERSION,
+  type RelayEventEnvelope,
+  type RelayRequestEnvelope,
+  type RelayResponseEnvelope,
+} from '../../types/relayProtocol.js'
+
+const DEFAULT_PULL_WAIT_MS = 25_000
+const MAX_PULL_WAIT_MS = 25_000
+const MIN_RPC_TIMEOUT_MS = 5_000
+const MAX_RPC_TIMEOUT_MS = 300_000
+const DEFAULT_RPC_TIMEOUT_MS = 60_000
+
+type RelayAgentRecord = {
+  id: string
+  name: string
+  tokenHash: string
+  createdAtIso: string
+  updatedAtIso: string
+  lastSeenAtIso?: string
+}
+
+type RelayAgentPublicRecord = {
+  id: string
+  name: string
+  createdAtIso: string
+  updatedAtIso: string
+  connected: boolean
+  lastSeenAtIso?: string
+}
+
+type RelaySession = {
+  sessionId: string
+  agentId: string
+  createdAtIso: string
+  updatedAtIso: string
+  queue: RelayRequestEnvelope[]
+  waiters: Set<(messages: RelayRequestEnvelope[]) => void>
+}
+
+type PendingRelayRpc = {
+  resolve: (value: unknown) => void
+  reject: (error: unknown) => void
+  timeoutHandle: NodeJS.Timeout
+}
+
+type RelayRoute = {
+  scopeKey: string
+  serverId: string
+  agentId: string
+}
+
+type RelayNotificationListener = (event: RelayEventEnvelope & { agentId: string }) => void
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function hashToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
+}
+
+function createAgentId(): string {
+  return `agent-${randomBytes(6).toString('hex')}`
+}
+
+function createSecretToken(): string {
+  return randomBytes(32).toString('base64url')
+}
+
+function createSessionId(): string {
+  return `session-${randomBytes(12).toString('hex')}`
+}
+
+function createRelayId(): string {
+  return `relay-${randomBytes(12).toString('hex')}`
+}
+
+function clampTimeout(value: unknown, fallbackMs: number): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return fallbackMs
+  const normalized = Math.trunc(numeric)
+  if (normalized < MIN_RPC_TIMEOUT_MS) return MIN_RPC_TIMEOUT_MS
+  if (normalized > MAX_RPC_TIMEOUT_MS) return MAX_RPC_TIMEOUT_MS
+  return normalized
+}
+
+function clampPullWaitMs(value: unknown): number {
+  const numeric = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(numeric)) return DEFAULT_PULL_WAIT_MS
+  const normalized = Math.trunc(numeric)
+  if (normalized < 0) return 0
+  if (normalized > MAX_PULL_WAIT_MS) return MAX_PULL_WAIT_MS
+  return normalized
+}
+
+function toPublicAgentRecord(agent: RelayAgentRecord, connected: boolean): RelayAgentPublicRecord {
+  return {
+    id: agent.id,
+    name: agent.name,
+    createdAtIso: agent.createdAtIso,
+    updatedAtIso: agent.updatedAtIso,
+    connected,
+    ...(agent.lastSeenAtIso ? { lastSeenAtIso: agent.lastSeenAtIso } : {}),
+  }
+}
+
+function toRouteKey(route: { scopeKey: string; serverId: string }): string {
+  return `${route.scopeKey}::${route.serverId}`
+}
+
+export class RelayHubError extends Error {
+  readonly code: string
+  readonly statusCode: number
+
+  constructor(code: string, message: string, statusCode = 400) {
+    super(message)
+    this.code = code
+    this.statusCode = statusCode
+  }
+}
+
+export class OutboundRelayHub {
+  private readonly agentsById = new Map<string, RelayAgentRecord>()
+  private readonly sessionById = new Map<string, RelaySession>()
+  private readonly sessionIdByAgentId = new Map<string, string>()
+  private readonly pendingRpcById = new Map<string, PendingRelayRpc>()
+  private readonly listenersByRouteKey = new Map<string, Set<RelayNotificationListener>>()
+
+  listAgents(): RelayAgentPublicRecord[] {
+    return Array.from(this.agentsById.values())
+      .map((agent) => toPublicAgentRecord(agent, this.sessionIdByAgentId.has(agent.id)))
+      .sort((left, right) => left.name.localeCompare(right.name))
+  }
+
+  createAgent(name?: string): { agent: RelayAgentPublicRecord; token: string } {
+    const nowIso = new Date().toISOString()
+    const token = createSecretToken()
+    const tokenHash = hashToken(token)
+    let id = createAgentId()
+    while (this.agentsById.has(id)) {
+      id = createAgentId()
+    }
+
+    const normalizedName = typeof name === 'string' && name.trim().length > 0
+      ? name.trim()
+      : `Relay Agent ${String(this.agentsById.size + 1)}`
+
+    const record: RelayAgentRecord = {
+      id,
+      name: normalizedName,
+      tokenHash,
+      createdAtIso: nowIso,
+      updatedAtIso: nowIso,
+    }
+    this.agentsById.set(id, record)
+
+    return {
+      agent: toPublicAgentRecord(record, false),
+      token,
+    }
+  }
+
+  connectWithToken(token: string): { sessionId: string; pollTimeoutMs: number; agent: RelayAgentPublicRecord } {
+    const normalized = token.trim()
+    if (!normalized) {
+      throw new RelayHubError('relay_auth_failed', 'Missing relay agent token', 401)
+    }
+
+    const tokenHash = hashToken(normalized)
+    let matchedAgent: RelayAgentRecord | null = null
+    for (const agent of this.agentsById.values()) {
+      if (agent.tokenHash === tokenHash) {
+        matchedAgent = agent
+        break
+      }
+    }
+
+    if (!matchedAgent) {
+      throw new RelayHubError('relay_auth_failed', 'Invalid relay agent token', 401)
+    }
+
+    const previousSessionId = this.sessionIdByAgentId.get(matchedAgent.id)
+    if (previousSessionId) {
+      this.disposeSession(previousSessionId)
+    }
+
+    const nowIso = new Date().toISOString()
+    const session: RelaySession = {
+      sessionId: createSessionId(),
+      agentId: matchedAgent.id,
+      createdAtIso: nowIso,
+      updatedAtIso: nowIso,
+      queue: [],
+      waiters: new Set(),
+    }
+    this.sessionById.set(session.sessionId, session)
+    this.sessionIdByAgentId.set(matchedAgent.id, session.sessionId)
+
+    matchedAgent.updatedAtIso = nowIso
+    matchedAgent.lastSeenAtIso = nowIso
+
+    return {
+      sessionId: session.sessionId,
+      pollTimeoutMs: DEFAULT_PULL_WAIT_MS,
+      agent: toPublicAgentRecord(matchedAgent, true),
+    }
+  }
+
+  pullMessages(sessionId: string, waitMsRaw?: unknown): Promise<RelayRequestEnvelope[]> {
+    const session = this.sessionById.get(sessionId)
+    if (!session) {
+      throw new RelayHubError('relay_invalid_session', 'Unknown relay session', 401)
+    }
+
+    const waitMs = clampPullWaitMs(waitMsRaw)
+    this.touchSession(session)
+
+    if (session.queue.length > 0 || waitMs === 0) {
+      return Promise.resolve(this.flushSessionQueue(session))
+    }
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        session.waiters.delete(handleQueue)
+        resolve(this.flushSessionQueue(session))
+      }, waitMs)
+
+      const handleQueue = (messages: RelayRequestEnvelope[]) => {
+        clearTimeout(timeout)
+        session.waiters.delete(handleQueue)
+        resolve(messages)
+      }
+
+      session.waiters.add(handleQueue)
+    })
+  }
+
+  pushMessages(sessionId: string, rawMessages: unknown[]): { accepted: number } {
+    const session = this.sessionById.get(sessionId)
+    if (!session) {
+      throw new RelayHubError('relay_invalid_session', 'Unknown relay session', 401)
+    }
+
+    this.touchSession(session)
+    let accepted = 0
+    for (const item of rawMessages) {
+      const record = asRecord(item)
+      if (!record) continue
+
+      const kind = typeof record.kind === 'string' ? record.kind : ''
+      if (kind === 'response') {
+        if (this.acceptResponseEnvelope(record, session.agentId)) {
+          accepted += 1
+        }
+        continue
+      }
+
+      if (kind === 'event') {
+        if (this.acceptEventEnvelope(record, session.agentId)) {
+          accepted += 1
+        }
+      }
+    }
+
+    return { accepted }
+  }
+
+  async dispatchRpc(
+    route: RelayRoute,
+    method: string,
+    params: unknown,
+    timeoutMsRaw?: unknown,
+  ): Promise<unknown> {
+    const sessionId = this.sessionIdByAgentId.get(route.agentId)
+    if (!sessionId) {
+      throw new RelayHubError('relay_agent_offline', `Relay agent "${route.agentId}" is offline`, 503)
+    }
+
+    const session = this.sessionById.get(sessionId)
+    if (!session) {
+      this.sessionIdByAgentId.delete(route.agentId)
+      throw new RelayHubError('relay_agent_offline', `Relay agent "${route.agentId}" is offline`, 503)
+    }
+
+    const relayId = createRelayId()
+    const timeoutMs = clampTimeout(timeoutMsRaw, DEFAULT_RPC_TIMEOUT_MS)
+    const envelope: RelayRequestEnvelope = {
+      protocol: RELAY_PROTOCOL,
+      version: RELAY_PROTOCOL_VERSION,
+      kind: 'request',
+      relayId,
+      route: {
+        scopeKey: route.scopeKey,
+        serverId: route.serverId,
+        channelId: `agent:${route.agentId}`,
+      },
+      method,
+      params: params ?? null,
+      sentAtIso: new Date().toISOString(),
+    }
+
+    const resultPromise = new Promise<unknown>((resolve, reject) => {
+      const timeoutHandle = setTimeout(() => {
+        this.pendingRpcById.delete(relayId)
+        reject(new RelayHubError('relay_timeout', `Relay RPC timed out after ${String(timeoutMs)}ms`, 504))
+      }, timeoutMs)
+
+      this.pendingRpcById.set(relayId, { resolve, reject, timeoutHandle })
+    })
+
+    session.queue.push(envelope)
+    this.flushWaiters(session)
+    return resultPromise
+  }
+
+  subscribeNotifications(route: { scopeKey: string; serverId: string }, listener: RelayNotificationListener): () => void {
+    const routeKey = toRouteKey(route)
+    const listeners = this.listenersByRouteKey.get(routeKey) ?? new Set<RelayNotificationListener>()
+    listeners.add(listener)
+    this.listenersByRouteKey.set(routeKey, listeners)
+
+    return () => {
+      const existing = this.listenersByRouteKey.get(routeKey)
+      if (!existing) return
+      existing.delete(listener)
+      if (existing.size === 0) {
+        this.listenersByRouteKey.delete(routeKey)
+      }
+    }
+  }
+
+  private touchSession(session: RelaySession): void {
+    const nowIso = new Date().toISOString()
+    session.updatedAtIso = nowIso
+    const agent = this.agentsById.get(session.agentId)
+    if (agent) {
+      agent.updatedAtIso = nowIso
+      agent.lastSeenAtIso = nowIso
+    }
+  }
+
+  private flushSessionQueue(session: RelaySession): RelayRequestEnvelope[] {
+    if (session.queue.length === 0) {
+      return []
+    }
+    const messages = [...session.queue]
+    session.queue = []
+    return messages
+  }
+
+  private flushWaiters(session: RelaySession): void {
+    if (session.waiters.size === 0 || session.queue.length === 0) {
+      return
+    }
+
+    const messages = this.flushSessionQueue(session)
+    for (const waiter of session.waiters) {
+      waiter(messages)
+    }
+    session.waiters.clear()
+  }
+
+  private acceptResponseEnvelope(record: Record<string, unknown>, agentId: string): boolean {
+    const relayId = typeof record.relayId === 'string' ? record.relayId : ''
+    if (!relayId) return false
+
+    const pending = this.pendingRpcById.get(relayId)
+    if (!pending) return false
+    this.pendingRpcById.delete(relayId)
+    clearTimeout(pending.timeoutHandle)
+
+    const errorRecord = asRecord(record.error)
+    if (errorRecord) {
+      const errorMessage = typeof errorRecord.message === 'string' && errorRecord.message.length > 0
+        ? errorRecord.message
+        : 'Relay RPC failed'
+      pending.reject(new RelayHubError('relay_remote_error', `[${agentId}] ${errorMessage}`, 502))
+      return true
+    }
+
+    pending.resolve(record.result ?? null)
+    return true
+  }
+
+  private acceptEventEnvelope(record: Record<string, unknown>, agentId: string): boolean {
+    const route = asRecord(record.route)
+    const scopeKey = typeof route?.scopeKey === 'string' ? route.scopeKey.trim() : ''
+    const serverId = typeof route?.serverId === 'string' ? route.serverId.trim() : ''
+    if (!scopeKey || !serverId) return false
+
+    const eventName = typeof record.event === 'string' && record.event.trim().length > 0
+      ? record.event.trim()
+      : 'relay/event'
+    const params = record.params ?? null
+    const sentAtIso = typeof record.sentAtIso === 'string' && record.sentAtIso.trim().length > 0
+      ? record.sentAtIso.trim()
+      : new Date().toISOString()
+
+    const envelope: RelayEventEnvelope & { agentId: string } = {
+      protocol: RELAY_PROTOCOL,
+      version: RELAY_PROTOCOL_VERSION,
+      kind: 'event',
+      event: eventName,
+      route: {
+        scopeKey,
+        serverId,
+        channelId: `agent:${agentId}`,
+      },
+      params,
+      sentAtIso,
+      agentId,
+    }
+
+    const routeKey = toRouteKey({ scopeKey, serverId })
+    const listeners = this.listenersByRouteKey.get(routeKey)
+    if (!listeners || listeners.size === 0) return true
+    for (const listener of listeners) {
+      listener(envelope)
+    }
+    return true
+  }
+
+  private disposeSession(sessionId: string): void {
+    const session = this.sessionById.get(sessionId)
+    if (!session) return
+    this.sessionById.delete(sessionId)
+    this.sessionIdByAgentId.delete(session.agentId)
+    for (const waiter of session.waiters) {
+      waiter([])
+    }
+    session.waiters.clear()
+  }
+}
