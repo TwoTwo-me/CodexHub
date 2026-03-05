@@ -76,6 +76,13 @@ You run one command. It starts a local web server. You open it from your machine
 
 ---
 
+## 📘 Implementation Report
+
+- Multi-stage delivery report (Multi-server, Multi-user, Outbound relay, E2EE):  
+  [`docs/implementation-report.md`](docs/implementation-report.md)
+
+---
+
 ## 🌍 What Can You Do With This?
 
 | 🔥 Use Case | 💥 What You Get |
