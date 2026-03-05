@@ -5,7 +5,7 @@ import {
   RELAY_SERVER_ID_HEADER,
   normalizeRelayChannelId,
 } from '../types/relayProtocol'
-import { normalizeRelayE2eeEnvelope, type RelayE2eeEnvelope } from '../types/relayE2ee'
+import { RELAY_E2EE_RPC_METHOD, normalizeRelayE2eeEnvelope, type RelayE2eeEnvelope } from '../types/relayE2ee'
 import { decryptRelayE2eePayload, encryptRelayE2eePayload } from '../utils/relayE2eeCrypto'
 import { CodexApiError, extractErrorMessage } from './codexErrors'
 
@@ -42,6 +42,8 @@ type ServerRequestReplyBody = {
     message: string
   }
 }
+
+const MAX_NOTIFICATION_QUEUE_DEPTH = 200
 
 function normalizeServerId(serverId?: string): string {
   return typeof serverId === 'string' ? serverId.trim() : ''
@@ -286,18 +288,47 @@ export function subscribeRpcNotifications(
 
   const scopedServerId = normalizeServerId(options.serverId)
   const scopedChannelId = normalizeChannelId(options.channelId)
+  const relayE2ee = normalizeRelayE2eeConfig(options.relayE2ee)
   const source = new EventSource(buildServerScopedEventUrl('/codex-api/events', scopedServerId, scopedChannelId))
+  let notificationQueue = Promise.resolve()
+  let queuedNotificationCount = 0
 
   source.onmessage = (event) => {
-    try {
-      const parsed = JSON.parse(event.data) as unknown
-      const notification = toNotification(parsed, scopedServerId, scopedChannelId)
-      if (notification) {
-        onNotification(notification)
-      }
-    } catch {
-      // Ignore malformed event payloads and keep stream alive.
+    if (queuedNotificationCount >= MAX_NOTIFICATION_QUEUE_DEPTH) {
+      return
     }
+    queuedNotificationCount += 1
+    notificationQueue = notificationQueue
+      .then(async () => {
+        const parsed = JSON.parse(event.data) as unknown
+        const notification = toNotification(parsed, scopedServerId, scopedChannelId)
+        if (!notification) return
+
+        if (relayE2ee && notification.method === RELAY_E2EE_RPC_METHOD) {
+          const encryptedEnvelope = normalizeRelayE2eeEnvelope(asRecord(notification.params)?.e2ee)
+          if (!encryptedEnvelope) return
+
+          const decrypted = await decryptRelayE2eePayload(encryptedEnvelope, relayE2ee)
+          const decryptedRecord = asRecord(decrypted)
+          const decryptedMethod = typeof decryptedRecord?.method === 'string' ? decryptedRecord.method.trim() : ''
+          if (!decryptedMethod) return
+
+          onNotification({
+            ...notification,
+            method: decryptedMethod,
+            params: decryptedRecord?.params ?? null,
+          })
+          return
+        }
+
+        onNotification(notification)
+      })
+      .catch(() => {
+        // Ignore malformed event payloads and keep stream alive.
+      })
+      .finally(() => {
+        queuedNotificationCount = Math.max(0, queuedNotificationCount - 1)
+      })
   }
 
   return () => {
