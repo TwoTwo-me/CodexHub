@@ -111,7 +111,7 @@
                 </button>
               </div>
               <ServerPicker
-                v-if="isHomeRoute || isThreadRoute"
+                v-if="(isHomeRoute && hasRegisteredServers) || isThreadRoute"
                 :model-value="selectedServerId"
                 :options="availableServers"
                 mode="compact"
@@ -119,7 +119,7 @@
                 @update:model-value="onSelectServer"
               />
               <p v-if="isThreadRoute" class="header-thread-subtitle">{{ threadHeaderTitle }}</p>
-              <CwdPicker v-if="isHomeRoute" v-model="newThreadCwd" />
+              <CwdPicker v-if="isHomeRoute && hasRegisteredServers" v-model="newThreadCwd" />
             </div>
           </template>
         </ContentHeader>
@@ -137,17 +137,26 @@
           </template>
           <template v-else-if="isHomeRoute">
             <div class="content-grid">
-              <div class="new-thread-empty">
-                <p class="new-thread-hero">New thread</p>
-              </div>
+              <template v-if="hasRegisteredServers">
+                <div class="new-thread-empty">
+                  <p class="new-thread-hero">New thread</p>
+                </div>
 
-              <ThreadComposer :active-thread-id="composerThreadContextId"
-                :cwd="composerCwd"
-                :models="availableModelIds" :selected-model="selectedModelId"
-                :selected-reasoning-effort="selectedReasoningEffort" :skills="installedSkills"
-                :is-turn-in-progress="false"
-                :is-interrupting-turn="false" @submit="onSubmitThreadMessage"
-                @update:selected-model="onSelectModel" @update:selected-reasoning-effort="onSelectReasoningEffort" />
+                <ThreadComposer :active-thread-id="composerThreadContextId"
+                  :cwd="composerCwd"
+                  :models="availableModelIds" :selected-model="selectedModelId"
+                  :selected-reasoning-effort="selectedReasoningEffort" :skills="installedSkills"
+                  :is-turn-in-progress="false"
+                  :is-interrupting-turn="false" @submit="onSubmitThreadMessage"
+                  @update:selected-model="onSelectModel" @update:selected-reasoning-effort="onSelectReasoningEffort" />
+              </template>
+              <section v-else class="registration-empty-state">
+                <p class="registration-empty-eyebrow">Server registration required</p>
+                <h2 class="registration-empty-title">Register a server to start a thread</h2>
+                <p class="registration-empty-body">
+                  Local folders stay unavailable until you explicitly register a server or connector.
+                </p>
+              </section>
             </div>
           </template>
           <template v-else>
@@ -298,6 +307,7 @@ type SessionUser = {
 const sessionUser = ref<SessionUser | null>(null)
 const isLoggingOut = ref(false)
 const isAdminUser = computed(() => sessionUser.value?.role === 'admin')
+const hasRegisteredServers = computed(() => availableServers.value.length > 0)
 const sessionLabel = computed(() => {
   const user = sessionUser.value
   if (!user) return 'Guest'
@@ -307,7 +317,7 @@ const selectedServerLabel = computed(() => {
   const selectedId = selectedServerId.value
   const selected = availableServers.value.find((server) => server.id === selectedId)
   if (selected) return selected.label
-  return availableServers.value[0]?.label ?? 'Server'
+  return availableServers.value[0]?.label ?? 'No server registered'
 })
 const selectedProjectLabel = computed(() => {
   const thread = selectedThread.value
@@ -761,6 +771,22 @@ async function onLogout(): Promise<void> {
 
 .new-thread-hero {
   @apply m-0 text-2xl sm:text-[2.5rem] font-semibold leading-[1.05] text-zinc-900;
+}
+
+.registration-empty-state {
+  @apply flex-1 min-h-0 mx-3 sm:mx-6 rounded-2xl border border-dashed border-zinc-300 bg-zinc-50 px-5 py-8 sm:px-8 sm:py-10 flex flex-col items-start justify-center gap-3;
+}
+
+.registration-empty-eyebrow {
+  @apply m-0 text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500;
+}
+
+.registration-empty-title {
+  @apply m-0 text-2xl sm:text-3xl font-semibold text-zinc-950;
+}
+
+.registration-empty-body {
+  @apply m-0 max-w-2xl text-sm sm:text-base leading-6 text-zinc-600;
 }
 
 .admin-guard {

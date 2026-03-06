@@ -53,13 +53,6 @@ const AUTO_REFRESH_INTERVAL_MS = 4000
 const REASONING_EFFORT_OPTIONS: ReasoningEffort[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh']
 const GLOBAL_SERVER_REQUEST_SCOPE = '__global__'
 
-const FALLBACK_SERVER_OPTION: CodexServerInfo = {
-  id: '',
-  label: 'Default server',
-  description: '',
-  transport: 'local',
-}
-
 function loadReadStateMap(): Record<string, string> {
   if (typeof window === 'undefined') return {}
 
@@ -643,7 +636,7 @@ function normalizeServerList(value: CodexServerInfo[]): CodexServerInfo[] {
   const seen = new Set<string>()
   for (const row of value) {
     const id = row.id.trim()
-    const label = row.label.trim() || id || FALLBACK_SERVER_OPTION.label
+    const label = row.label.trim() || id || 'Server'
     const description = row.description.trim()
     const transport = row.transport === 'relay' ? 'relay' : 'local'
     const relayAgentId = typeof row.relayAgentId === 'string' ? row.relayAgentId.trim() : ''
@@ -683,7 +676,7 @@ export function useDesktopState() {
   const projectGroups = ref<UiProjectGroup[]>([])
   const sourceGroups = ref<UiProjectGroup[]>([])
   const selectedThreadId = ref(loadSelectedThreadId())
-  const availableServers = ref<CodexServerInfo[]>([FALLBACK_SERVER_OPTION])
+  const availableServers = ref<CodexServerInfo[]>([])
   const selectedServerId = ref(loadSelectedServerId())
   setGatewayActiveServerId(selectedServerId.value)
   const persistedMessagesByThreadId = ref<Record<string, UiMessage[]>>({})
@@ -737,10 +730,10 @@ export function useDesktopState() {
   const pendingTurnStartsById = new Map<string, TurnStartedInfo>()
 
   const allThreads = computed(() => flattenThreads(projectGroups.value))
-  const selectedServer = computed<CodexServerInfo>(() =>
+  const selectedServer = computed<CodexServerInfo | null>(() =>
     availableServers.value.find((server) => server.id === selectedServerId.value)
       ?? availableServers.value[0]
-      ?? FALLBACK_SERVER_OPTION,
+      ?? null,
   )
   const selectedThread = computed(() =>
     allThreads.value.find((thread) => thread.id === selectedThreadId.value) ?? null,
@@ -823,6 +816,9 @@ export function useDesktopState() {
     pendingThreadsRefresh = false
     threadTitleById.value = {}
     hasLoadedThreads.value = false
+    availableModelIds.value = []
+    selectedModelId.value = ''
+    installedSkills.value = []
   }
 
   async function refreshServers(): Promise<void> {
@@ -834,10 +830,6 @@ export function useDesktopState() {
       nextServers = normalizeServerList(directory.servers)
     } catch {
       // Keep the last known list when the server directory endpoint is temporarily unavailable.
-    }
-
-    if (nextServers.length === 0) {
-      nextServers = [{ ...FALLBACK_SERVER_OPTION }]
     }
 
     availableServers.value = nextServers
@@ -2063,6 +2055,10 @@ export function useDesktopState() {
 
     try {
       await refreshServers()
+      if (availableServers.value.length === 0 || !selectedServerId.value.trim()) {
+        resetServerScopedUiState()
+        return
+      }
       await loadThreads()
       await Promise.all([
         refreshModelPreferences(),
@@ -2549,6 +2545,7 @@ export function useDesktopState() {
     if (typeof window === 'undefined') return
 
     if (stopNotificationStream) return
+    if (!selectedServerId.value.trim()) return
     setGatewayActiveServerId(selectedServerId.value)
     if (isAutoRefreshEnabled.value) {
       startAutoRefreshTimer()

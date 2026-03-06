@@ -67,20 +67,18 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
 }>()
 
-const fallbackOption: ServerPickerOption = { id: '', label: 'Default server', description: '' }
-
 const normalizedOptions = computed<ServerPickerOption[]>(() => {
-  return props.options.length > 0 ? props.options : [fallbackOption]
+  return props.options
 })
 
-const selectedOption = computed<ServerPickerOption>(() => {
+const selectedOption = computed<ServerPickerOption | null>(() => {
   return normalizedOptions.value.find((option) => option.id === props.modelValue)
     ?? normalizedOptions.value[0]
-    ?? fallbackOption
+    ?? null
 })
 
-const selectedLabel = computed(() => selectedOption.value.label)
-const selectedDescription = computed(() => selectedOption.value.description ?? '')
+const selectedLabel = computed(() => selectedOption.value?.label ?? 'No server registered')
+const selectedDescription = computed(() => selectedOption.value?.description ?? '')
 
 function onChange(event: Event): void {
   if (props.disabled) return
