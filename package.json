@@ -24,7 +24,8 @@
     "node": ">=18"
   },
   "bin": {
-    "codexui": "dist-cli/index.js"
+    "codexui": "dist-cli/index.js",
+    "codexui-connector": "dist-cli/connector.js"
   },
   "files": [
     "dist/",
