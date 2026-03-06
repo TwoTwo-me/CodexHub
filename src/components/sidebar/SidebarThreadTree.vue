@@ -45,302 +45,304 @@
               <span v-if="isServerSelected(server.id)" class="server-row-active-tag">Active</span>
             </template>
           </SidebarMenuRow>
-        </li>
-      </ul>
-    </section>
 
-    <SidebarMenuRow v-if="!isActiveServerExpanded" as="p" class="server-collapsed-row">
-      <template #left>
-        <span class="project-empty-spacer" />
-      </template>
-      <span class="project-empty">Server folder is collapsed</span>
-    </SidebarMenuRow>
+          <section v-if="isServerSelected(server.id)" class="server-node-children">
+            <SidebarMenuRow v-if="isServerCollapsed(server.id)" as="p" class="server-collapsed-row">
+              <template #left>
+                <span class="project-empty-spacer" />
+              </template>
+              <span class="project-empty">Server folder is collapsed</span>
+            </SidebarMenuRow>
 
-    <section v-else class="server-tree-children">
-    <section v-if="pinnedThreads.length > 0" class="pinned-section">
-      <ul class="thread-list">
-        <li v-for="thread in pinnedThreads" :key="thread.id" class="thread-row-item">
-          <SidebarMenuRow
-            class="thread-row"
-            :data-active="thread.id === selectedThreadId"
-            :data-pinned="isPinned(thread.id)"
-            @mouseleave="onThreadRowLeave(thread.id)"
-          >
-            <template #left>
-              <span class="thread-left-stack">
-                <span v-if="thread.inProgress || thread.unread" class="thread-status-indicator" :data-state="getThreadState(thread)" />
-                <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
-                  <IconTablerPin class="thread-icon" />
-                </button>
-              </span>
-            </template>
-            <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
-              <span class="thread-row-title-wrap">
-                <span class="thread-row-title">{{ thread.title }}</span>
-                <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="Worktree thread" />
-              </span>
-            </button>
-            <template #right>
-              <span class="thread-row-time">{{ formatRelative(thread.createdAtIso || thread.updatedAtIso) }}</span>
-            </template>
-            <template #right-hover>
-              <button
-                class="thread-archive-button"
-                :data-confirm="archiveConfirmThreadId === thread.id"
-                type="button"
-                title="archive_thread"
-                @click="onArchiveClick(thread.id)"
-              >
-                <span v-if="archiveConfirmThreadId === thread.id">confirm</span>
-                <IconTablerArchive v-else class="thread-icon" />
-              </button>
-            </template>
-          </SidebarMenuRow>
-        </li>
-      </ul>
-    </section>
+            <section v-else class="server-tree-children">
+              <section v-if="pinnedThreads.length > 0" class="pinned-section">
+                <ul class="thread-list">
+                  <li v-for="thread in pinnedThreads" :key="thread.id" class="thread-row-item">
+                    <SidebarMenuRow
+                      class="thread-row"
+                      :data-active="thread.id === selectedThreadId"
+                      :data-pinned="isPinned(thread.id)"
+                      @mouseleave="onThreadRowLeave(thread.id)"
+                    >
+                      <template #left>
+                        <span class="thread-left-stack">
+                          <span v-if="thread.inProgress || thread.unread" class="thread-status-indicator" :data-state="getThreadState(thread)" />
+                          <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
+                            <IconTablerPin class="thread-icon" />
+                          </button>
+                        </span>
+                      </template>
+                      <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
+                        <span class="thread-row-title-wrap">
+                          <span class="thread-row-title">{{ thread.title }}</span>
+                          <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="Worktree thread" />
+                        </span>
+                      </button>
+                      <template #right>
+                        <span class="thread-row-time">{{ formatRelative(thread.createdAtIso || thread.updatedAtIso) }}</span>
+                      </template>
+                      <template #right-hover>
+                        <button
+                          class="thread-archive-button"
+                          :data-confirm="archiveConfirmThreadId === thread.id"
+                          type="button"
+                          title="archive_thread"
+                          @click="onArchiveClick(thread.id)"
+                        >
+                          <span v-if="archiveConfirmThreadId === thread.id">confirm</span>
+                          <IconTablerArchive v-else class="thread-icon" />
+                        </button>
+                      </template>
+                    </SidebarMenuRow>
+                  </li>
+                </ul>
+              </section>
 
-    <SidebarMenuRow as="header" class="thread-tree-header-row">
-      <span class="thread-tree-header">Projects</span>
-      <template #right>
-        <div ref="organizeMenuWrapRef" class="organize-menu-wrap">
-          <button
-            class="organize-menu-trigger"
-            type="button"
-            :aria-expanded="isOrganizeMenuOpen"
-            aria-label="Organize threads"
-            title="Organize threads"
-            @click="toggleOrganizeMenu"
-          >
-            <IconTablerDots class="thread-icon" />
-          </button>
+              <SidebarMenuRow as="header" class="thread-tree-header-row">
+                <span class="thread-tree-header">Projects</span>
+                <template #right>
+                  <div ref="organizeMenuWrapRef" class="organize-menu-wrap">
+                    <button
+                      class="organize-menu-trigger"
+                      type="button"
+                      :aria-expanded="isOrganizeMenuOpen"
+                      aria-label="Organize threads"
+                      title="Organize threads"
+                      @click="toggleOrganizeMenu"
+                    >
+                      <IconTablerDots class="thread-icon" />
+                    </button>
 
-          <div v-if="isOrganizeMenuOpen" class="organize-menu-panel" @click.stop>
-            <p class="organize-menu-title">Organize</p>
-            <button
-              class="organize-menu-item"
-              :data-active="threadViewMode === 'project'"
-              type="button"
-              @click="setThreadViewMode('project')"
-            >
-              <span>By project</span>
-              <span v-if="threadViewMode === 'project'">✓</span>
-            </button>
-            <button
-              class="organize-menu-item"
-              :data-active="threadViewMode === 'chronological'"
-              type="button"
-              @click="setThreadViewMode('chronological')"
-            >
-              <span>Chronological list</span>
-              <span v-if="threadViewMode === 'chronological'">✓</span>
-            </button>
-          </div>
-        </div>
-      </template>
-    </SidebarMenuRow>
-
-    <p v-if="isSearchActive && filteredGroups.length === 0" class="thread-tree-no-results">No matching threads</p>
-
-    <p v-else-if="isLoading && groups.length === 0" class="thread-tree-loading">Loading threads...</p>
-
-    <ul v-else-if="isChronologicalView" class="thread-list thread-list-global">
-      <li v-for="thread in globalThreads" :key="thread.id" class="thread-row-item">
-        <SidebarMenuRow
-          class="thread-row"
-          :data-active="thread.id === selectedThreadId"
-          :data-pinned="isPinned(thread.id)"
-          @mouseleave="onThreadRowLeave(thread.id)"
-        >
-          <template #left>
-            <span class="thread-left-stack">
-              <span
-                v-if="thread.inProgress || thread.unread"
-                class="thread-status-indicator"
-                :data-state="getThreadState(thread)"
-              />
-              <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
-                <IconTablerPin class="thread-icon" />
-              </button>
-            </span>
-          </template>
-          <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
-            <span class="thread-row-title-wrap">
-              <span class="thread-row-title">{{ thread.title }}</span>
-              <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="Worktree thread" />
-            </span>
-          </button>
-          <template #right>
-            <span class="thread-row-time">{{ formatRelative(thread.createdAtIso || thread.updatedAtIso) }}</span>
-          </template>
-          <template #right-hover>
-            <button
-              class="thread-archive-button"
-              :data-confirm="archiveConfirmThreadId === thread.id"
-              type="button"
-              title="archive_thread"
-              @click="onArchiveClick(thread.id)"
-            >
-              <span v-if="archiveConfirmThreadId === thread.id">confirm</span>
-              <IconTablerArchive v-else class="thread-icon" />
-            </button>
-          </template>
-        </SidebarMenuRow>
-      </li>
-    </ul>
-
-    <div v-else ref="groupsContainerRef" class="thread-tree-groups" :style="groupsContainerStyle">
-      <article
-        v-for="group in filteredGroups"
-        :key="group.projectName"
-        :ref="(el) => setProjectGroupRef(group.projectName, el)"
-        class="project-group"
-        :data-project-name="group.projectName"
-        :data-expanded="!isCollapsed(group.projectName)"
-        :data-dragging="isDraggingProject(group.projectName)"
-        :style="projectGroupStyle(group.projectName)"
-      >
-          <SidebarMenuRow
-            as="div"
-            class="project-header-row"
-            role="button"
-            tabindex="0"
-            @click="toggleProjectCollapse(group.projectName)"
-            @keydown="onProjectHeaderKeyDown($event, group.projectName)"
-            @keydown.enter.prevent="toggleProjectCollapse(group.projectName)"
-            @keydown.space.prevent="toggleProjectCollapse(group.projectName)"
-          >
-            <template #left>
-              <span class="project-icon-stack">
-                <span class="project-icon-folder">
-                  <IconTablerFolder v-if="isCollapsed(group.projectName)" class="thread-icon" />
-                  <IconTablerFolderOpen v-else class="thread-icon" />
-                </span>
-                <span class="project-icon-chevron">
-                  <IconTablerChevronRight v-if="isCollapsed(group.projectName)" class="thread-icon" />
-                  <IconTablerChevronDown v-else class="thread-icon" />
-                </span>
-              </span>
-            </template>
-            <span
-              class="project-main-button"
-              :data-dragging-handle="isDraggingProject(group.projectName)"
-              @mousedown.left="onProjectHandleMouseDown($event, group.projectName)"
-            >
-              <span class="project-title">{{ getProjectDisplayName(group.projectName) }}</span>
-            </span>
-            <template #right>
-              <div class="project-hover-controls">
-                <div :ref="(el) => setProjectMenuWrapRef(group.projectName, el)" class="project-menu-wrap">
-                  <button
-                    class="project-menu-trigger"
-                    type="button"
-                    title="project_menu"
-                    @click.stop="toggleProjectMenu(group.projectName)"
-                  >
-                    <IconTablerDots class="thread-icon" />
-                  </button>
-
-                  <div v-if="isProjectMenuOpen(group.projectName)" class="project-menu-panel" @click.stop>
-                    <template v-if="projectMenuMode === 'actions'">
-                      <button class="project-menu-item" type="button" @click="openRenameProjectMenu(group.projectName)">
-                        Edit name
+                    <div v-if="isOrganizeMenuOpen" class="organize-menu-panel" @click.stop>
+                      <p class="organize-menu-title">Organize</p>
+                      <button
+                        class="organize-menu-item"
+                        :data-active="threadViewMode === 'project'"
+                        type="button"
+                        @click="setThreadViewMode('project')"
+                      >
+                        <span>By project</span>
+                        <span v-if="threadViewMode === 'project'">✓</span>
                       </button>
                       <button
-                        class="project-menu-item project-menu-item-danger"
+                        class="organize-menu-item"
+                        :data-active="threadViewMode === 'chronological'"
                         type="button"
-                        @click="onRemoveProject(group.projectName)"
+                        @click="setThreadViewMode('chronological')"
                       >
-                        Remove
+                        <span>Chronological list</span>
+                        <span v-if="threadViewMode === 'chronological'">✓</span>
                       </button>
-                    </template>
-                    <template v-else>
-                      <label class="project-menu-label">Project name</label>
-                      <input
-                        v-model="projectRenameDraft"
-                        class="project-menu-input"
-                        type="text"
-                        @input="onProjectNameInput(group.projectName)"
-                      />
-                    </template>
+                    </div>
                   </div>
-                </div>
-
-                <button
-                  class="thread-start-button"
-                  type="button"
-                  :aria-label="getNewThreadButtonAriaLabel(group.projectName)"
-                  :title="getNewThreadButtonAriaLabel(group.projectName)"
-                  @click.stop="onStartNewThread(group.projectName)"
-                >
-                  <IconTablerFilePencil class="thread-icon" />
-                </button>
-              </div>
-            </template>
-          </SidebarMenuRow>
-
-          <ul v-if="hasThreads(group)" class="thread-list">
-            <li v-for="thread in visibleThreads(group)" :key="thread.id" class="thread-row-item">
-              <SidebarMenuRow
-                class="thread-row"
-                :data-active="thread.id === selectedThreadId"
-                :data-pinned="isPinned(thread.id)"
-                @mouseleave="onThreadRowLeave(thread.id)"
-              >
-                <template #left>
-                  <span class="thread-left-stack">
-                    <span
-                      v-if="thread.inProgress || thread.unread"
-                      class="thread-status-indicator"
-                      :data-state="getThreadState(thread)"
-                    />
-                    <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
-                      <IconTablerPin class="thread-icon" />
-                    </button>
-                  </span>
-                </template>
-                <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
-                  <span class="thread-row-title-wrap">
-                    <span class="thread-row-title">{{ thread.title }}</span>
-                    <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="Worktree thread" />
-                  </span>
-                </button>
-                <template #right>
-                  <span class="thread-row-time">{{ formatRelative(thread.createdAtIso || thread.updatedAtIso) }}</span>
-                </template>
-                <template #right-hover>
-                  <button
-                    class="thread-archive-button"
-                    :data-confirm="archiveConfirmThreadId === thread.id"
-                    type="button"
-                    title="archive_thread"
-                    @click="onArchiveClick(thread.id)"
-                  >
-                    <span v-if="archiveConfirmThreadId === thread.id">confirm</span>
-                    <IconTablerArchive v-else class="thread-icon" />
-                  </button>
                 </template>
               </SidebarMenuRow>
-            </li>
-          </ul>
 
-          <SidebarMenuRow v-else as="p" class="project-empty-row">
-            <template #left>
-              <span class="project-empty-spacer" />
-            </template>
-            <span class="project-empty">No threads</span>
-          </SidebarMenuRow>
+              <p v-if="isSearchActive && filteredGroups.length === 0" class="thread-tree-no-results">No matching threads</p>
 
-          <SidebarMenuRow v-if="hasHiddenThreads(group)" class="thread-show-more-row">
-            <template #left>
-              <span class="thread-show-more-spacer" />
-            </template>
-            <button class="thread-show-more-button" type="button" @click="toggleProjectExpansion(group.projectName)">
-              {{ isExpanded(group.projectName) ? 'Show less' : 'Show more' }}
-            </button>
-          </SidebarMenuRow>
-      </article>
-    </div>
+              <p v-else-if="isLoading && groups.length === 0" class="thread-tree-loading">Loading threads...</p>
+
+              <ul v-else-if="isChronologicalView" class="thread-list thread-list-global">
+                <li v-for="thread in globalThreads" :key="thread.id" class="thread-row-item">
+                  <SidebarMenuRow
+                    class="thread-row"
+                    :data-active="thread.id === selectedThreadId"
+                    :data-pinned="isPinned(thread.id)"
+                    @mouseleave="onThreadRowLeave(thread.id)"
+                  >
+                    <template #left>
+                      <span class="thread-left-stack">
+                        <span
+                          v-if="thread.inProgress || thread.unread"
+                          class="thread-status-indicator"
+                          :data-state="getThreadState(thread)"
+                        />
+                        <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
+                          <IconTablerPin class="thread-icon" />
+                        </button>
+                      </span>
+                    </template>
+                    <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
+                      <span class="thread-row-title-wrap">
+                        <span class="thread-row-title">{{ thread.title }}</span>
+                        <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="Worktree thread" />
+                      </span>
+                    </button>
+                    <template #right>
+                      <span class="thread-row-time">{{ formatRelative(thread.createdAtIso || thread.updatedAtIso) }}</span>
+                    </template>
+                    <template #right-hover>
+                      <button
+                        class="thread-archive-button"
+                        :data-confirm="archiveConfirmThreadId === thread.id"
+                        type="button"
+                        title="archive_thread"
+                        @click="onArchiveClick(thread.id)"
+                      >
+                        <span v-if="archiveConfirmThreadId === thread.id">confirm</span>
+                        <IconTablerArchive v-else class="thread-icon" />
+                      </button>
+                    </template>
+                  </SidebarMenuRow>
+                </li>
+              </ul>
+
+              <div v-else ref="groupsContainerRef" class="thread-tree-groups" :style="groupsContainerStyle">
+                <article
+                  v-for="group in filteredGroups"
+                  :key="group.projectName"
+                  :ref="(el) => setProjectGroupRef(group.projectName, el)"
+                  class="project-group"
+                  :data-project-name="group.projectName"
+                  :data-expanded="!isCollapsed(group.projectName)"
+                  :data-dragging="isDraggingProject(group.projectName)"
+                  :style="projectGroupStyle(group.projectName)"
+                >
+                    <SidebarMenuRow
+                      as="div"
+                      class="project-header-row"
+                      role="button"
+                      tabindex="0"
+                      @click="toggleProjectCollapse(group.projectName)"
+                      @keydown="onProjectHeaderKeyDown($event, group.projectName)"
+                      @keydown.enter.prevent="toggleProjectCollapse(group.projectName)"
+                      @keydown.space.prevent="toggleProjectCollapse(group.projectName)"
+                    >
+                      <template #left>
+                        <span class="project-icon-stack">
+                          <span class="project-icon-folder">
+                            <IconTablerFolder v-if="isCollapsed(group.projectName)" class="thread-icon" />
+                            <IconTablerFolderOpen v-else class="thread-icon" />
+                          </span>
+                          <span class="project-icon-chevron">
+                            <IconTablerChevronRight v-if="isCollapsed(group.projectName)" class="thread-icon" />
+                            <IconTablerChevronDown v-else class="thread-icon" />
+                          </span>
+                        </span>
+                      </template>
+                      <span
+                        class="project-main-button"
+                        :data-dragging-handle="isDraggingProject(group.projectName)"
+                        @mousedown.left="onProjectHandleMouseDown($event, group.projectName)"
+                      >
+                        <span class="project-title">{{ getProjectDisplayName(group.projectName) }}</span>
+                      </span>
+                      <template #right>
+                        <div class="project-hover-controls">
+                          <div :ref="(el) => setProjectMenuWrapRef(group.projectName, el)" class="project-menu-wrap">
+                            <button
+                              class="project-menu-trigger"
+                              type="button"
+                              title="project_menu"
+                              @click.stop="toggleProjectMenu(group.projectName)"
+                            >
+                              <IconTablerDots class="thread-icon" />
+                            </button>
+
+                            <div v-if="isProjectMenuOpen(group.projectName)" class="project-menu-panel" @click.stop>
+                              <template v-if="projectMenuMode === 'actions'">
+                                <button class="project-menu-item" type="button" @click="openRenameProjectMenu(group.projectName)">
+                                  Edit name
+                                </button>
+                                <button
+                                  class="project-menu-item project-menu-item-danger"
+                                  type="button"
+                                  @click="onRemoveProject(group.projectName)"
+                                >
+                                  Remove
+                                </button>
+                              </template>
+                              <template v-else>
+                                <label class="project-menu-label">Project name</label>
+                                <input
+                                  v-model="projectRenameDraft"
+                                  class="project-menu-input"
+                                  type="text"
+                                  @input="onProjectNameInput(group.projectName)"
+                                />
+                              </template>
+                            </div>
+                          </div>
+
+                          <button
+                            class="thread-start-button"
+                            type="button"
+                            :aria-label="getNewThreadButtonAriaLabel(group.projectName)"
+                            :title="getNewThreadButtonAriaLabel(group.projectName)"
+                            @click.stop="onStartNewThread(group.projectName)"
+                          >
+                            <IconTablerFilePencil class="thread-icon" />
+                          </button>
+                        </div>
+                      </template>
+                    </SidebarMenuRow>
+
+                    <ul v-if="hasThreads(group)" class="thread-list">
+                      <li v-for="thread in visibleThreads(group)" :key="thread.id" class="thread-row-item">
+                        <SidebarMenuRow
+                          class="thread-row"
+                          :data-active="thread.id === selectedThreadId"
+                          :data-pinned="isPinned(thread.id)"
+                          @mouseleave="onThreadRowLeave(thread.id)"
+                        >
+                          <template #left>
+                            <span class="thread-left-stack">
+                              <span
+                                v-if="thread.inProgress || thread.unread"
+                                class="thread-status-indicator"
+                                :data-state="getThreadState(thread)"
+                              />
+                              <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
+                                <IconTablerPin class="thread-icon" />
+                              </button>
+                            </span>
+                          </template>
+                          <button class="thread-main-button" type="button" @click="onSelect(thread.id)">
+                            <span class="thread-row-title-wrap">
+                              <span class="thread-row-title">{{ thread.title }}</span>
+                              <IconTablerGitFork v-if="thread.hasWorktree" class="thread-row-worktree-icon" title="Worktree thread" />
+                            </span>
+                          </button>
+                          <template #right>
+                            <span class="thread-row-time">{{ formatRelative(thread.createdAtIso || thread.updatedAtIso) }}</span>
+                          </template>
+                          <template #right-hover>
+                            <button
+                              class="thread-archive-button"
+                              :data-confirm="archiveConfirmThreadId === thread.id"
+                              type="button"
+                              title="archive_thread"
+                              @click="onArchiveClick(thread.id)"
+                            >
+                              <span v-if="archiveConfirmThreadId === thread.id">confirm</span>
+                              <IconTablerArchive v-else class="thread-icon" />
+                            </button>
+                          </template>
+                        </SidebarMenuRow>
+                      </li>
+                    </ul>
+
+                    <SidebarMenuRow v-else as="p" class="project-empty-row">
+                      <template #left>
+                        <span class="project-empty-spacer" />
+                      </template>
+                      <span class="project-empty">No threads</span>
+                    </SidebarMenuRow>
+
+                    <SidebarMenuRow v-if="hasHiddenThreads(group)" class="thread-show-more-row">
+                      <template #left>
+                        <span class="thread-show-more-spacer" />
+                      </template>
+                      <button class="thread-show-more-button" type="button" @click="toggleProjectExpansion(group.projectName)">
+                        {{ isExpanded(group.projectName) ? 'Show less' : 'Show more' }}
+                      </button>
+                    </SidebarMenuRow>
+                </article>
+              </div>
+            </section>
+          </section>
+        </li>
+      </ul>
     </section>
   </section>
 </template>
@@ -552,8 +554,6 @@ const selectedServerKey = computed(() => {
   const firstServerId = props.availableServers[0]?.id ?? ''
   return toServerKey(firstServerId)
 })
-
-const isActiveServerExpanded = computed(() => !isServerCollapsedByKey(selectedServerKey.value))
 
 const globalThreads = computed<UiThread[]>(() => {
   const sourceGroups = filteredGroups.value
@@ -1353,8 +1353,12 @@ onBeforeUnmount(() => {
   @apply py-1;
 }
 
+.server-node-children {
+  @apply mt-0.5 ml-2;
+}
+
 .server-tree-children {
-  @apply ml-3 pl-2 border-l border-zinc-200;
+  @apply pl-2 border-l border-zinc-200;
 }
 
 .pinned-section {

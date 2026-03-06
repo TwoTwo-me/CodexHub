@@ -110,8 +110,16 @@
                   {{ isLoggingOut ? 'Signing out…' : 'Sign out' }}
                 </button>
               </div>
+              <ServerPicker
+                v-if="isHomeRoute || isThreadRoute"
+                :model-value="selectedServerId"
+                :options="availableServers"
+                mode="compact"
+                :disabled="isThreadRoute"
+                @update:model-value="onSelectServer"
+              />
+              <p v-if="isThreadRoute" class="header-thread-subtitle">{{ threadHeaderTitle }}</p>
               <CwdPicker v-if="isHomeRoute" v-model="newThreadCwd" />
-              <p v-else-if="headerCwdDisplay" class="header-cwd-readonly">{{ headerCwdDisplay }}</p>
             </div>
           </template>
         </ContentHeader>
@@ -129,15 +137,6 @@
           </template>
           <template v-else-if="isHomeRoute">
             <div class="content-grid">
-              <div class="content-server-stack content-server-stack-home">
-                <ServerPicker
-                  :model-value="selectedServerId"
-                  :options="availableServers"
-                  mode="list"
-                  tone="hero"
-                  @update:model-value="onSelectServer"
-                />
-              </div>
               <div class="new-thread-empty">
                 <p class="new-thread-hero">New thread</p>
               </div>
@@ -153,15 +152,6 @@
           </template>
           <template v-else>
             <div class="content-grid">
-              <div class="content-server-stack content-server-stack-thread">
-                <ServerPicker
-                  :model-value="selectedServerId"
-                  :options="availableServers"
-                  mode="list"
-                  tone="muted"
-                  @update:model-value="onSelectServer"
-                />
-              </div>
               <div class="content-thread">
                 <ThreadConversation :messages="filteredMessages" :is-loading="isLoadingMessages"
                   :active-thread-id="composerThreadContextId" :scroll-state="selectedThreadScrollState"
@@ -299,6 +289,7 @@ const knownThreadIdSet = computed(() => {
 const isHomeRoute = computed(() => route.name === 'home')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isAdminRoute = computed(() => route.name === 'admin')
+const isThreadRoute = computed(() => route.name === 'thread')
 type SessionUser = {
   id: string
   username: string
@@ -312,17 +303,26 @@ const sessionLabel = computed(() => {
   if (!user) return 'Guest'
   return `${user.username} (${user.role})`
 })
+const selectedServerLabel = computed(() => {
+  const selectedId = selectedServerId.value
+  const selected = availableServers.value.find((server) => server.id === selectedId)
+  if (selected) return selected.label
+  return availableServers.value[0]?.label ?? 'Server'
+})
+const selectedProjectLabel = computed(() => {
+  const thread = selectedThread.value
+  if (!thread) return '~'
+  const projectName = thread.projectName?.trim() ?? ''
+  if (!projectName) return '~'
+  return projectDisplayNameById.value[projectName] ?? projectName
+})
 const contentTitle = computed(() => {
   if (isSkillsRoute.value) return 'Skills'
   if (isAdminRoute.value) return 'Admin'
   if (isHomeRoute.value) return 'New thread'
-  return selectedThread.value?.title ?? 'Choose a thread'
+  return `${selectedServerLabel.value} / ${selectedProjectLabel.value}`
 })
-const headerCwdDisplay = computed(() => {
-  if (isSkillsRoute.value || isAdminRoute.value) return ''
-  const homePath = selectedThread.value?.cwd?.trim() ?? ''
-  return homePath || '~'
-})
+const threadHeaderTitle = computed(() => selectedThread.value?.title ?? 'Choose a thread')
 const autoRefreshButtonLabel = computed(() =>
   isAutoRefreshEnabled.value
     ? `Auto refresh in ${String(autoRefreshSecondsLeft.value)}s`
@@ -719,6 +719,10 @@ async function onLogout(): Promise<void> {
   @apply min-w-0 flex flex-col gap-1;
 }
 
+.header-thread-subtitle {
+  @apply m-0 text-sm font-semibold text-zinc-800 truncate;
+}
+
 .header-session-row {
   @apply min-w-0 flex items-center justify-end gap-2;
 }
@@ -741,18 +745,6 @@ async function onLogout(): Promise<void> {
 
 .content-grid {
   @apply flex-1 min-h-0 flex flex-col gap-3;
-}
-
-.content-server-stack {
-  @apply px-3 sm:px-6 pt-0.5 flex flex-col gap-2;
-}
-
-.content-server-stack-home {
-  @apply text-zinc-950;
-}
-
-.content-server-stack-thread {
-  @apply text-zinc-500;
 }
 
 .content-thread {

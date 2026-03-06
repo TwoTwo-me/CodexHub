@@ -8,6 +8,7 @@
           :key="option.id || option.label"
           class="server-picker-chip"
           type="button"
+          :disabled="disabled"
           :data-active="option.id === modelValue"
           :title="option.description || option.label"
           @click="onSelect(option.id)"
@@ -22,6 +23,7 @@
         v-if="normalizedOptions.length > 1"
         class="server-picker-select"
         :value="modelValue"
+        :disabled="disabled"
         @change="onChange"
       >
         <option
@@ -54,9 +56,11 @@ const props = withDefaults(defineProps<{
   options: ServerPickerOption[]
   mode?: 'compact' | 'list'
   tone?: 'default' | 'hero' | 'muted'
+  disabled?: boolean
 }>(), {
   mode: 'compact',
   tone: 'default',
+  disabled: false,
 })
 
 const emit = defineEmits<{
@@ -79,11 +83,13 @@ const selectedLabel = computed(() => selectedOption.value.label)
 const selectedDescription = computed(() => selectedOption.value.description ?? '')
 
 function onChange(event: Event): void {
+  if (props.disabled) return
   const value = (event.target as HTMLSelectElement | null)?.value ?? ''
   emit('update:modelValue', value)
 }
 
 function onSelect(value: string): void {
+  if (props.disabled) return
   emit('update:modelValue', value)
 }
 </script>
@@ -119,6 +125,10 @@ function onSelect(value: string): void {
   @apply max-w-[15rem] min-w-[7rem] h-7 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-700 outline-none transition focus:border-zinc-400;
 }
 
+.server-picker-select:disabled {
+  @apply bg-zinc-100 text-zinc-500 cursor-not-allowed;
+}
+
 .server-picker-static {
   @apply text-xs text-zinc-600 truncate;
 }
@@ -129,6 +139,10 @@ function onSelect(value: string): void {
 
 .server-picker-chip {
   @apply rounded-lg border px-3 py-1.5 transition;
+}
+
+.server-picker-chip:disabled {
+  @apply cursor-not-allowed opacity-80;
 }
 
 .server-picker[data-mode='list'][data-tone='hero'] .server-picker-chip {
