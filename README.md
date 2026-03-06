@@ -1,299 +1,194 @@
-# 🔥 codexapp
+# CodexUI Hub
 
-### 🚀 Run Codex App UI Anywhere: Linux, Windows, or Termux on Android 🚀
+Docker-first Codex hub for **multi-user**, **multi-server**, and **outbound Connector** workflows.
 
-[![npm](https://img.shields.io/npm/v/codexapp?style=for-the-badge&logo=npm&logoColor=white)](https://www.npmjs.com/package/codexapp)
-[![platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20Android-blue?style=for-the-badge)](#-quick-start)
-[![node](https://img.shields.io/badge/Node-18%2B-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org/)
-[![license](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](./LICENSE)
+This fork is operated as a central **Hub** service with per-user servers, Connector lifecycle management, explicit registration, relay transport, and hardened bootstrap onboarding.
 
-> **Codex UI in your browser. No drama. One command.**
->  
-> **Yes, that is your Codex desktop app experience exposed over web UI. Yes, it runs cross-platform.**
+> Upstream origin: [friuns/codexui](https://github.com/friuns/codexui)
+
+## What changed in this fork
+
+- **Hub-first deployment** for a VM, cloud server, or homelab host
+- **Explicit server registration** only — nothing appears automatically
+- **Multi-user auth** with admin bootstrap + user/session management
+- **Settings UI** for Connector creation, rename, reinstall, delete, and status
+- **Outbound-only Connector model** for remote Codex hosts
+- **Bootstrap hardening**: one-time install token -> durable runtime credential
+- **Docker packaging** for the Hub with `.env`, `Dockerfile`, and `docker-compose.yml`
+
+## Architecture
 
 ```text
- ██████╗ ██████╗ ██████╗ ███████╗██╗  ██╗██╗   ██╗██╗
-██╔════╝██╔═══██╗██╔══██╗██╔════╝╚██╗██╔╝██║   ██║██║
-██║     ██║   ██║██║  ██║█████╗   ╚███╔╝ ██║   ██║██║
-██║     ██║   ██║██║  ██║██╔══╝   ██╔██╗ ██║   ██║██║
-╚██████╗╚██████╔╝██████╔╝███████╗██╔╝ ██╗╚██████╔╝██║
- ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝
+Browser
+  │
+  ▼
+CodexUI Hub
+  ├─ Auth / sessions / admin
+  ├─ Server registry
+  ├─ Connector registry
+  ├─ Relay hub
+  └─ Web UI
+       │
+       ├─ Local servers (explicitly registered)
+       └─ Remote Connector-backed servers
+            │
+            ▼
+      codexui-connector
+            │
+            ▼
+      Codex CLI / codex app-server
 ```
 
----
+## Quick start (recommended)
 
-## 🤯 What Is This?
-**`codexapp`** is a lightweight bridge that gives you a browser-accessible UI for Codex app-server workflows.
+### 1. Edit `.env`
 
-You run one command. It starts a local web server. You open it from your machine, your LAN, or wherever your setup allows.  
+At minimum, change:
 
-**TL;DR 🧠: Codex app UI, unlocked for Linux, Windows, and Termux-powered Android setups.**
+```dotenv
+CODEXUI_ADMIN_PASSWORD=change-me-now
+CODEXUI_PUBLIC_URL=http://localhost:4300
+```
 
----
+Useful variables:
 
-## ⚡ Quick Start
-> **The main event.**
+```dotenv
+CODEXUI_HOST_PORT=4300
+CODEXUI_DATA_DIR=./.data/hub
+CODEXUI_WORKSPACE_DIR=./workspace
+CODEXUI_CODEX_HOME_DIR=./docker/local-codex
+CODEXUI_SKIP_CODEX_LOGIN=true
+CODEXUI_CODEX_CLI_VERSION=0.110.0
+```
+
+### 2. Start the Hub
 
 ```bash
-# 🔓 Run instantly (recommended)
-npx codexapp
-
-# 🌐 Then open in browser
-# http://localhost:18923
+npm run docker:hub:up
 ```
 
-### Linux 🐧
+or:
+
 ```bash
-node -v   # should be 18+
-npx codexapp
+docker compose up --build -d hub
 ```
 
-### Windows 🪟 (PowerShell)
-```powershell
-node -v   # 18+
-npx codexapp
-```
+### 3. Smoke test
 
-### Termux (Android) 🤖
 ```bash
-pkg update && pkg upgrade -y
-pkg install nodejs -y
-npx codexapp
+npm run docker:hub:smoke
 ```
 
-Android background requirements:
+### 4. Open the UI
 
-1. Keep `codexapp` running in the current Termux session (do not close it).
-2. In Android settings, disable battery optimization for `Termux`.
-3. Keep the persistent Termux notification enabled so Android is less likely to kill it.
-4. Optional but recommended in Termux:
-```bash
-termux-wake-lock
-```
-5. Open the shown URL in your Android browser. If the app is killed, return to Termux and run `npx codexapp` again.
+- URL: `http://localhost:4300` or your configured public URL
+- Username: `admin` by default
+- Password: `CODEXUI_ADMIN_PASSWORD`
 
----
+## Docker layout
 
-## ✨ Features
-> **The payload.**
+- `Dockerfile` — production Hub image
+- `docker-compose.yml` — Hub deployment stack
+- `.env` — Docker runtime defaults
+- `docker/hub/entrypoint.sh` — container startup wrapper
+- `scripts/docker/hub-*.sh` — helper commands
 
-- 🚀 One-command launch with `npx codexapp`
-- 🌍 Cross-platform support for Linux, Windows, and Termux on Android
-- 🖥️ Browser-first Codex UI flow on `http://localhost:18923`
-- 🌐 LAN-friendly access from other devices on the same network
-- 🧭 Explicit server registration model (no surprise default server)
-- ⚙️ Settings screen for connector registration, bootstrap state, rename, reissue install token, and delete
-- 🔌 Packaged `codexui-connector` CLI for outbound relay hosts
-- 🧪 Remote/headless-friendly setup for server-based Codex usage
-- 🔌 Works with reverse proxies and tunneling setups
-- 🔗 Dedicated Settings screen for connector registration, bootstrap lifecycle, and deletion
-- 🌐 Outbound relay connector package (`codexui-connector`) for remote server onboarding
-- ⚡ No global install required for quick experimentation
-- 🎙️ Built-in hold-to-dictate voice input with transcription to composer draft
+Persisted directories:
 
----
+- `CODEXUI_DATA_DIR` -> Hub data, users, registries, cache
+- `CODEXUI_WORKSPACE_DIR` -> optional workspace mount for Hub-local projects
+- `CODEXUI_CODEX_HOME_DIR` -> optional local Codex auth/config for Hub-local runtimes
+- `CODEXUI_SKIP_CODEX_LOGIN=true` -> lets the Hub start in remote-only mode without forcing local Codex login
 
-## 🧩 Recent Product Features (from main commits)
-> **Not just launch. Actual UX upgrades.**
+## Connector onboarding
 
-- 🗂️ Searchable project picker in new-thread flow
-- ➕ Inline "Add new project" input inside picker (no browser prompt)
-- 📌 New projects get pinned to top automatically
-- 🧠 Smart default new-project name suggestion via server-side free-directory scan (`New Project (N)`)
-- 🔄 Project order persisted globally to workspace roots state
-- 🧵 Optimistic in-progress threads preserved during refresh/poll cycles
-- 📱 Mobile drawer sidebar in desktop layout (teleported overlay + swipe-friendly structure)
-- 🎛️ Skills Hub mobile-friendly spacing/toolbar layout improvements
-- 🪟 Skill detail modal tuned for mobile sheet-style behavior
-- 🧪 Skills Hub event typing fix for `SkillCard` select emit compatibility
-- 🎙️ Voice dictation flow in composer (`hold to dictate` -> transcribe -> append text)
+1. Sign in to the Hub
+2. Open **Settings**
+3. Create a Connector
+4. Reveal the one-time bootstrap token
+5. Save it on the remote host
+6. Run the generated install command
+7. Start `codexui-connector connect`
+8. Confirm status, project count, and thread count in Settings
 
----
-
-## 📘 Implementation Report
-
-- Multi-stage delivery report (Multi-server, Multi-user, Outbound relay, E2EE):  
- [`docs/implementation-report.md`](docs/implementation-report.md)
-- Connector bootstrap hardening report:  
-  [`docs/connector-bootstrap-hardening-report.md`](docs/connector-bootstrap-hardening-report.md)
-
-
-## 🔗 Hub + Connector Onboarding
-
-CodexUI can now run as a central **hub** with user-scoped remote **connectors**.
-
-### From the web UI
-1. Open **Settings**
-2. Create a connector
-3. Reveal the one-time bootstrap token and save it to a secure file on the remote host
-4. Run the suggested `codexui-connector install --token-file ...` command
-5. Start the daemon with `codexui-connector connect --token-file ...` (or use `install --run`)
-
-### From a terminal
-```bash
-read -sr CODEXUI_HUB_PASSWORD && printf '%s' "$CODEXUI_HUB_PASSWORD" | \
-  npx codexui-connector provision \
-    --hub https://hub.example.com \
-    --username alice \
-    --password-stdin \
-    --connector edge-laptop \
-    --name 'Alice Edge Laptop'
-```
-
-Then save the issued bootstrap token to a secure file and install the remote connector:
+### Remote host example
 
 ```bash
 install -d -m 700 $HOME/.codexui-connector
 printf '%s' '<bootstrap-token>' > $HOME/.codexui-connector/edge-laptop.token
 chmod 600 $HOME/.codexui-connector/edge-laptop.token
+
 npx codexui-connector install \
   --hub https://hub.example.com \
   --connector edge-laptop \
   --token-file $HOME/.codexui-connector/edge-laptop.token
-# token file is rewritten with the durable credential
+
 npx codexui-connector connect \
   --hub https://hub.example.com \
   --connector edge-laptop \
   --token-file $HOME/.codexui-connector/edge-laptop.token
 ```
 
-Detailed guides:
-- [`docs/settings-and-connectors.md`](docs/settings-and-connectors.md)
-- [`docs/connector-package.md`](docs/connector-package.md)
+## Optional: Hub-local Codex runtime
 
-## ⚙️ Settings + Connector Onboarding
+If you want the **Hub container itself** to host a local Codex runtime:
 
-CodexUI now uses an **explicit registration** model:
-- no local/default server is auto-created
-- a fresh account starts empty
-- you register a server or connector before opening projects and threads
-
-### Browser flow
-
-1. Sign in to the hub.
-2. Open **Settings** in the sidebar.
-3. Create a connector.
-4. Reveal the one-time bootstrap token and save it to a secure file on the target host.
-5. Run the suggested `install --token-file` command.
-6. Start the runtime with `connect --token-file` (or use `install --run`).
-
-### Connector CLI flow
-
-Provision from a remote host:
+1. Copy local Codex auth into the mounted Hub Codex home:
 
 ```bash
-read -sr CODEXUI_HUB_PASSWORD && printf '%s' "$CODEXUI_HUB_PASSWORD" | \
-node dist-cli/connector.js provision \
-  --hub https://hub.example.com \
-  --username admin \
-  --password-stdin \
-  --connector build-runner \
-  --name "Build Runner"
+npm run docker:hub:prepare-auth
 ```
 
-Install from an issued bootstrap token saved to a file:
+2. Register a local server from inside the container:
 
 ```bash
-install -d -m 700 $HOME/.codexui-connector
-printf '%s' '<bootstrap-token>' > $HOME/.codexui-connector/build-runner.token
-chmod 600 $HOME/.codexui-connector/build-runner.token
-node dist-cli/connector.js install \
-  --hub https://hub.example.com \
-  --connector build-runner \
-  --token-file $HOME/.codexui-connector/build-runner.token
-# same file now stores the durable relay credential
-node dist-cli/connector.js connect \
-  --hub https://hub.example.com \
-  --connector build-runner \
-  --token-file $HOME/.codexui-connector/build-runner.token
+npm run docker:hub:register-local -- --default local-hub "Hub Local"
 ```
 
-More details:
-- [`docs/settings-and-connectors.md`](docs/settings-and-connectors.md)
-- [`docs/connector-package.md`](docs/connector-package.md)
+This is optional. The primary deployment model is still **Hub + remote Connectors**.
 
----
+## Local non-Docker run
 
-## 🌍 What Can You Do With This?
-
-| 🔥 Use Case | 💥 What You Get |
-|---|---|
-| 💻 Linux workstation | Run Codex UI in browser without depending on desktop shell |
-| 🪟 Windows machine | Launch web UI and access from Chrome/Edge quickly |
-| 📱 Termux on Android | Start service in Termux and control from mobile browser |
-| 🧪 Remote dev box | Keep Codex process on server, view UI from client device |
-| 🌐 LAN sharing | Open UI from another device on same network |
-| 🧰 Headless workflows | Keep terminal + browser split for productivity |
-| 🔌 Custom routing | Put behind reverse proxy/tunnel if needed |
-| ⚡ Fast experiments | `npx` run without full global setup |
-
----
-
-## 🖼️ Screenshots
-
-### Skills Hub
-![Skills Hub](docs/screenshots/skills-hub.png)
-
-### Chat
-![Chat](docs/screenshots/chat.png)
-
-### Mobile UI
-![Skills Hub Mobile](docs/screenshots/skills-hub-mobile.png)
-![Chat Mobile](docs/screenshots/chat-mobile.png)
-
----
-
-## 🏗️ Architecture
-
-```text
-┌─────────────────────────────┐
-│  Browser (Desktop/Mobile)   │
-└──────────────┬──────────────┘
-               │ HTTP / SSE
-┌──────────────▼──────────────┐
-│       CodexUI Hub           │
-│ (Express + Vue + Relay Hub) │
-└───────┬───────────┬─────────┘
-        │           │
-        │ local     │ outbound relay
-        ▼           ▼
-┌──────────────┐  ┌──────────────────────┐
-│ Codex server │  │ codexui-connector    │
-│ (local)      │  │ install + connect    │
-│              │  │ + Codex app-server   │
-└──────────────┘  └──────────────────────┘
+```bash
+npm ci
+npm run build
+node dist-cli/index.js --host 0.0.0.0 --port 4300 --password admin
 ```
 
----
+Useful environment variables:
 
-## 🎯 Requirements
-- ✅ Node.js `18+`
-- ✅ Codex app-server environment available
-- ✅ Browser access to host/port
-- ✅ Microphone permission (only for voice dictation)
+- `CODEXUI_BIND_HOST`
+- `CODEXUI_PORT`
+- `CODEXUI_ADMIN_USERNAME`
+- `CODEXUI_OPEN_BROWSER=false`
+- `CODEX_HOME`
 
----
+## Documentation
 
-## 🐛 Troubleshooting
+- [`docs/hub-docker-deployment.md`](docs/hub-docker-deployment.md) — primary deployment guide
+- [`docs/settings-and-connectors.md`](docs/settings-and-connectors.md) — Settings UI and Connector lifecycle
+- [`docs/connector-package.md`](docs/connector-package.md) — remote Connector install/runtime guide
+- [`docs/implementation-report.md`](docs/implementation-report.md) — phase-by-phase implementation summary
+- [`docs/connector-bootstrap-hardening-report.md`](docs/connector-bootstrap-hardening-report.md) — bootstrap hardening details
+- [`docs/multi-server-test-workflow.md`](docs/multi-server-test-workflow.md) — disposable multi-server Docker lab stack
 
-| ❌ Problem | ✅ Fix |
-|---|---|
-| Port already in use | Run on a free port or stop old process |
-| `npx` fails | Update npm/node, then retry |
-| Termux install fails | `pkg update && pkg upgrade` then reinstall `nodejs` |
-| Can’t open from other device | Check firewall, bind address, and LAN routing |
+## Operational notes
 
----
+- Fresh users start with **no default server**.
+- Local folders stay unavailable until a server is explicitly registered.
+- Public deployments should use **HTTPS** in front of the Hub.
+- Connector bootstrap tokens are single-use and short-lived.
+- The durable Connector credential is distinct from the bootstrap token.
 
-## 🤝 Contributing
-Issues and PRs are welcome.  
-Bring bug reports, platform notes, and setup improvements.
+## Verification
 
----
+```bash
+npm run build
+npm run test:multi-server
+npm run docker:hub:smoke
+npm audit --json
+```
 
-## ⭐ Star This Repo
-If you believe Codex UI should be accessible from **any machine, any OS, any screen**, star this project and share it. ⭐
+## License
 
-<div align="center">
-Built for speed, portability, and a little bit of chaos 😏
-</div>
+MIT

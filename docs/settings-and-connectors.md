@@ -1,10 +1,10 @@
 # Settings + Connectors
 
-This phase introduces a dedicated **Settings** screen for connector lifecycle management, including bootstrap install state and reinstall flows.
+The **Settings** page is the operator UI for the Docker-hosted CodexUI Hub.
+
+Use it to create, inspect, rename, reinstall, and delete per-user Connectors that attach remote Codex hosts to the Hub.
 
 ## Scope
-
-The hub now treats every remote runtime as an explicitly registered **Connector** that creates a matching relay-backed **Server** entry for the current user.
 
 ```text
 Hub
@@ -15,46 +15,71 @@ Hub
             └─ Thread
 ```
 
-## What changed
+## Important behavior
 
 ### 1. Explicit registration only
-- Fresh users no longer receive an implicit local/default server.
-- Local folders stay unavailable until a server or connector is registered.
-- Connector creation automatically creates the bound relay server entry for the same user scope.
+- Fresh users do **not** receive a default local server.
+- Local or remote runtimes only become available after explicit registration.
+- Every Connector creation also creates the matching relay-backed Server entry for the current user.
 
-### 2. `/settings` route
-- Added a dedicated Settings page in the left navigation.
-- The page loads connector data from `GET /codex-api/connectors?includeStats=1`.
-- The content area keeps the existing session controls while the Settings panel handles connector CRUD and bootstrap lifecycle state.
+### 2. Docker Hub baseline
+The intended operator model is:
+- central Hub runs in Docker
+- users log into the Hub UI
+- users register their own Connectors from **Settings**
+- remote machines connect back outbound using `codexui-connector`
 
-### 3. Connector lifecycle UI
-The Settings page supports:
-- Create connector
-- Inspect connector metadata
-- Rename connector
-- **Reissue install token** (reinstall flow)
-- Delete connector
-- View install state:
-  - `Pending install`
-  - `Connected`
-  - `Offline`
-  - `Expired bootstrap`
-  - `Reinstall required`
-- View counts (`projects`, `threads`)
-- View last-seen timestamp
-- View bootstrap metadata (`issued`, `expires`, `consumed`, `credential issued`)
+### 3. `/settings` route
+The Settings page loads Connector state from:
 
-### 4. Server binding model
-Each connector now owns a relay-backed server record:
-- `connector.id` → user-visible connector identifier
-- `connector.serverId` → server registry binding
-- `connector.relayAgentId` → relay transport identity
+- `GET /codex-api/connectors?includeStats=1`
 
-Deleting a connector removes the bound server and disposes the runtime entry for that user scope.
+It supports:
+- create Connector
+- inspect lifecycle metadata
+- rename Connector
+- reissue install token
+- delete Connector
+- confirm online/offline state
+- inspect project/thread counts
+
+## Lifecycle states
+
+- `Pending install`
+- `Connected`
+- `Offline`
+- `Expired bootstrap`
+- `Reinstall required`
+
+## What each Connector row represents
+
+Each Connector owns:
+
+- `connector.id` — user-visible Connector identifier
+- `connector.serverId` — linked Server registry record
+- `connector.relayAgentId` — relay transport identity
+
+Deleting the Connector removes the matching relay-backed Server from the same user scope.
+
+## Recommended operator flow
+
+1. Deploy the Hub with Docker
+2. Set `CODEXUI_PUBLIC_URL` to the public Hub origin
+3. Sign in to the Hub
+4. Open **Settings**
+5. Create a Connector using that Hub origin
+6. Reveal the bootstrap token once
+7. Save it securely on the remote host
+8. Run the suggested `codexui-connector install --token-file ...` command
+9. Start the runtime with `codexui-connector connect --token-file ...`
+10. Return to Settings and confirm:
+    - install state
+    - transport online/offline state
+    - project count
+    - thread count
 
 ## API surface
 
-### Connector APIs
 - `GET /codex-api/connectors?includeStats=1`
 - `POST /codex-api/connectors`
 - `PATCH /codex-api/connectors/:id`
@@ -62,75 +87,36 @@ Deleting a connector removes the bound server and disposes the runtime entry for
 - `DELETE /codex-api/connectors/:id`
 - `POST /codex-api/connectors/:id/bootstrap-exchange`
 
-### Returned fields
-Connector payloads now expose:
-- `id`
-- `serverId`
-- `name`
-- `hubAddress`
-- `relayAgentId`
-- `installState`
-- `bootstrapIssuedAtIso`
-- `bootstrapExpiresAtIso`
-- `bootstrapConsumedAtIso`
-- `credentialIssuedAtIso`
-- `connected`
-- `lastSeenAtIso`
-- `projectCount`
-- `threadCount`
-- `lastStatsAtIso`
-- `statsStale`
-- optional `relayE2eeKeyId`
-
 ## Bootstrap security model
 
 ### Create / reissue
-- `POST /codex-api/connectors` returns a **bootstrap token**.
-- `POST /codex-api/connectors/:id/rotate-token` invalidates the current durable credential and issues a fresh bootstrap token.
+- `POST /codex-api/connectors` returns a one-time **bootstrap token**.
+- `POST /codex-api/connectors/:id/rotate-token` invalidates the current durable runtime credential and issues a fresh install token.
 
 ### Exchange
 - `POST /codex-api/connectors/:id/bootstrap-exchange` is the one-time enrollment step.
-- The connector presents the bootstrap token as a bearer token.
-- The hub returns a **durable relay credential**.
-- Replaying the same bootstrap token is rejected.
+- The Connector authenticates with the bootstrap token.
+- The Hub returns a **durable relay credential**.
+- Replay attempts are rejected.
 - Expired bootstrap tokens are rejected.
 
 ### Runtime
-- Only the durable relay credential is accepted by:
-  - `POST /codex-api/relay/agent/connect`
-  - `GET /codex-api/relay/agent/pull`
-  - `POST /codex-api/relay/agent/push`
+Only the durable runtime credential is accepted by:
+- `POST /codex-api/relay/agent/connect`
+- `GET /codex-api/relay/agent/pull`
+- `POST /codex-api/relay/agent/push`
 
-## Status and count behavior
+## Status / counts
 
-- When a connector is online, the hub requests `thread/list` through the relay transport and derives:
-  - unique project count
-  - thread count
-- The hub stores the latest successful snapshot in the connector registry.
-- If the connector is offline, the last snapshot is exposed with `statsStale: true`.
+When a Connector is online, the Hub can derive:
+- unique project count
+- thread count
 
-## Recommended operator flow
-
-1. Open **Settings**
-2. Create a connector
-3. Reveal the bootstrap token once and save it to a secure file on the remote host
-4. Run the suggested `codexui-connector install --token-file ...` command
-5. Start the connector with `codexui-connector connect --token-file ...` (or use `install --run`)
-6. Return to Settings to confirm:
-   - install state
-   - online state
-   - project count
-   - thread count
-7. Use **Reissue install token** when reinstalling or revoking a connector
-
-## Security guardrails
-
-- Non-local hub addresses must use **HTTPS**.
-- Bootstrap tokens are masked until the operator explicitly reveals them.
-- Suggested install commands use `--token-file` so secrets do not need to appear in shell history.
-- Bootstrap tokens are one-time and short-lived; the durable credential is issued only after successful exchange.
+The latest successful stats snapshot is cached in the Connector registry and marked stale if the Connector later goes offline.
 
 ## Related docs
+
+- [`docs/hub-docker-deployment.md`](./hub-docker-deployment.md)
 - [`docs/connector-package.md`](./connector-package.md)
 - [`docs/implementation-report.md`](./implementation-report.md)
 - [`docs/multi-server-test-workflow.md`](./multi-server-test-workflow.md)

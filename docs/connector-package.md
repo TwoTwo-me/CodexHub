@@ -1,17 +1,38 @@
 # codexui-connector package
 
-`codexui-connector` is the outbound relay client installed on a remote Codex host.
+`codexui-connector` is the outbound client installed on each remote Codex host.
 
-It connects to a central CodexUI hub, exchanges a one-time bootstrap token for a durable relay credential, pulls relay RPC requests, forwards them into the local `codex app-server`, and pushes responses / notifications back to the hub.
+Its job is to connect a remote host back to the central CodexUI Hub, exchange a one-time bootstrap token for a durable runtime credential, pull relay RPC requests, forward them into the local `codex app-server`, and push responses/events back to the Hub.
 
-## Commands
+## Remote host requirements
 
-### 1. Provision a connector from hub credentials
+- Node.js 18+
+- Codex CLI installed and available as `codex`
+- Local Codex authentication at `~/.codex/auth.json`
 
-This command logs into the hub, registers a connector for the current user, and returns:
-- connector metadata
-- a **one-time bootstrap token**
-- a generated `install --token-file ...` command
+If `auth.json` is missing, the Connector refuses to start and tells the operator to run:
+
+```bash
+codex login
+```
+
+## Recommended onboarding path
+
+### A. Hub UI path (recommended)
+
+1. Deploy the Hub with Docker
+2. Set `CODEXUI_PUBLIC_URL` to the public Hub origin
+3. Sign in to the Hub
+4. Open **Settings**
+5. Create a Connector
+6. Reveal the one-time bootstrap token
+7. Save it to a secure token file on the remote host
+8. Run `codexui-connector install`
+9. Start `codexui-connector connect`
+
+### B. Terminal-only path
+
+You can also register from a terminal using Hub credentials:
 
 ```bash
 read -sr CODEXUI_HUB_PASSWORD && printf '%s' "$CODEXUI_HUB_PASSWORD" | \
@@ -23,16 +44,14 @@ read -sr CODEXUI_HUB_PASSWORD && printf '%s' "$CODEXUI_HUB_PASSWORD" | \
   --name 'Alice Edge Laptop'
 ```
 
-Optional flags:
-- `--json` — emit structured JSON for automation (includes the one-time bootstrap token)
-- `--run` — immediately exchange the bootstrap token and start the connector on the current host
-- `--key-id <id>` — attach relay E2EE policy metadata
-- `--passphrase <secret>` — required together with `--run` when E2EE is enabled
-- `--allow-insecure-http` — allow plaintext HTTP for non-loopback lab environments only
+This returns:
+- Connector metadata
+- a one-time bootstrap token
+- a suggested install command
 
-### 2. Install from a bootstrap token file
+## Install flow
 
-Save the bootstrap token to a secure file first:
+### 1. Save the bootstrap token securely
 
 ```bash
 install -d -m 700 $HOME/.codexui-connector
@@ -40,7 +59,7 @@ printf '%s' '<bootstrap-token>' > $HOME/.codexui-connector/edge-laptop.token
 chmod 600 $HOME/.codexui-connector/edge-laptop.token
 ```
 
-Then exchange it for the durable connector credential:
+### 2. Exchange it for the durable credential
 
 ```bash
 npx codexui-connector install \
@@ -49,20 +68,13 @@ npx codexui-connector install \
   --token-file $HOME/.codexui-connector/edge-laptop.token
 ```
 
-What happens during install:
-1. Reads the bootstrap token
-2. Calls `POST /codex-api/connectors/:id/bootstrap-exchange`
-3. Receives the durable relay credential
-4. Rewrites the same `--token-file` in place with the durable credential
+During `install` the Connector:
+1. reads the bootstrap token
+2. calls `POST /codex-api/connectors/:id/bootstrap-exchange`
+3. receives the durable runtime credential
+4. rewrites the same `--token-file` with the durable credential
 
-Optional flags:
-- `--run` — exchange the bootstrap token and immediately start the connector
-- `--key-id <id>` + `--passphrase <secret>` — required together when `--run` is used with relay E2EE
-- `--allow-insecure-http` — allow plaintext HTTP for non-loopback lab environments only
-
-### 3. Connect with the durable credential file
-
-After installation, use the same token file to start the daemon:
+### 3. Start the Connector runtime
 
 ```bash
 npx codexui-connector connect \
@@ -71,108 +83,51 @@ npx codexui-connector connect \
   --token-file $HOME/.codexui-connector/edge-laptop.token
 ```
 
-Optional relay E2EE arguments:
+## Useful flags
 
-```bash
-npx codexui-connector connect \
-  --hub https://hub.example.com \
-  --connector edge-laptop \
-  --token-file $HOME/.codexui-connector/edge-laptop.token \
-  --key-id relay-key-1 \
-  --passphrase '<relay-passphrase>'
-```
+### `install`
+- `--run` — install and immediately start the runtime
+- `--key-id <id>` + `--passphrase <secret>` — required together when relay E2EE is enabled and `--run` is used
+- `--allow-insecure-http` — lab use only when the Hub is not on HTTPS
 
-## Requirements on the remote host
+### `provision`
+- `--json` — return structured output for automation
+- `--run` — provision, exchange bootstrap token, and start immediately on the same host
+- `--key-id <id>` — attach relay E2EE metadata
+- `--passphrase <secret>` — required together with `--run` when relay E2EE is enabled
 
-- Node.js 18+
-- Codex CLI installed and available as `codex`
-- Local Codex authentication (`~/.codex/auth.json`)
+## Runtime behavior
 
-If `auth.json` is missing, the connector refuses to start and instructs the operator to run:
+At runtime the Connector:
+1. authenticates with the durable relay credential
+2. opens a relay session
+3. pulls queued requests from the Hub
+4. forwards them to the local `codex app-server`
+5. pushes responses/events back to the Hub
 
-```bash
-codex login
-```
+## Docker note
 
-## What the connector does
+The root `docker-compose.yml` in this repo is for the **Hub**.
 
-### Install time
-1. Exchanges the bootstrap token for a durable credential
-2. Stores the durable credential in the local token file
+The Connector normally runs on a separate remote machine, but it can also run in a container if that container includes:
 
-### Runtime
-1. Authenticates to the hub using the durable relay credential
-2. Opens a relay session
-3. Pulls queued relay RPC requests
-4. Calls the local `codex app-server`
-5. Pushes relay responses back to the hub
-6. Forwards local notifications as relay events
-
-## Suggested install flow
-
-### From the hub UI
-1. Open **Settings**
-2. Create a connector
-3. Reveal the bootstrap token once and save it to a secure file on the remote host
-4. Run the generated `codexui-connector install --token-file ...` command
-5. Start the daemon with `codexui-connector connect --token-file ...` (or use `install --run`)
-
-### From a terminal only
-1. Provision with hub credentials
-2. Save the returned bootstrap token to a secure file (or use `--json` for automation)
-3. Run `codexui-connector install --token-file ...`
-4. Start `codexui-connector connect --token-file ...`
-
-## Systemd example
-
-Install the connector once, then point systemd at the durable credential file:
-
-```ini
-[Unit]
-Description=CodexUI Connector
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/codexui-connector
-ExecStart=/usr/bin/env npx codexui-connector connect --hub https://hub.example.com --connector edge-laptop --token-file /etc/codexui/edge-laptop.token
-Restart=always
-RestartSec=3
-Environment=NODE_ENV=production
-
-[Install]
-WantedBy=multi-user.target
-```
-
-## Docker example
-
-If you prefer containers, build an image that already contains:
 - Node.js
 - Codex CLI
 - `~/.codex/auth.json`
-
-After running the bootstrap install once, mount the rewritten durable credential file into the container:
-
-```bash
-docker run --rm \
-  -e CODEX_HOME=/root/.codex \
-  -v /path/to/auth.json:/root/.codex/auth.json:ro \
-  -v /path/to/edge-laptop.token:/run/secrets/edge-laptop.token:ro \
-  my-codex-connector-image \
-  npx codexui-connector connect --hub https://hub.example.com --connector edge-laptop --token-file /run/secrets/edge-laptop.token
-```
+- the durable Connector token file
 
 ## Security notes
 
-- Bootstrap tokens are **short-lived, single-use install secrets** and should be treated like passwords.
-- The durable relay credential is distinct from the bootstrap token and is the only secret accepted by `connect` / `pull` / `push`.
-- Non-local hubs must use **HTTPS** unless you explicitly opt into `--allow-insecure-http` for lab use.
-- Reissue install tokens from the Settings page when reinstalling or revoking a host.
-- Relay E2EE passphrases are not persisted by the web UI and must be supplied again on the connector host when needed.
+- Bootstrap tokens are **single-use, short-lived install secrets**.
+- The durable runtime credential is distinct from the bootstrap token.
+- Public Hubs should use **HTTPS**.
+- Reissue install tokens from Settings whenever reinstalling or revoking a host.
+- Suggested commands use `--token-file` so secrets do not have to appear in shell history.
 
 ## Verification
 
-- `node dist-cli/connector.js --help`
-- `node --test tests/multi-server/relay-connector-provisioning.test.mjs`
-- `node --test tests/multi-server/connector-provisioning-package.test.mjs`
+```bash
+node dist-cli/connector.js --help
+node --test tests/multi-server/relay-connector-provisioning.test.mjs
+node --test tests/multi-server/connector-provisioning-package.test.mjs
+```

@@ -1,5 +1,7 @@
 # Multi-Stage Implementation Report (Phase 1 → Phase 5)
 
+> Operational baseline update (2026-03-07): the repository is now documented and packaged as a **Docker-first CodexUI Hub**. Use [`docs/hub-docker-deployment.md`](./hub-docker-deployment.md) for deployment and treat `docker/multi-server/` as a test fixture stack.
+
 ## Scope
 - Phase 1: Multi-server support
 - Phase 2: Multi-user + auth + admin panel
@@ -91,6 +93,21 @@
 - `npm run test:multi-server` ✅
 - `npm run test:playwright:admin` ✅
 - Security/code gate reviews: GO ✅
+
+---
+
+## Deployment packaging — Docker Hub
+
+### Delivered
+- Root `Dockerfile` for a production Hub image.
+- Root `docker-compose.yml` for a single-Hub deployment.
+- Tracked `.env` with first-boot defaults.
+- `scripts/docker/hub-smoke.sh` for post-start validation.
+- README/docs rewritten around Hub + Connector deployment and upstream attribution.
+
+### Validation
+- `npm run build` ✅
+- `docker compose config` ✅
 
 ---
 

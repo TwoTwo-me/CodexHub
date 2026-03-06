@@ -1,136 +1,85 @@
-# Multi-server test + Docker workflow
+# Multi-server Docker test workflow
 
-This document covers worker-3 assets for serverId routing contract tests and Codex CLI multi-server Docker verification.
+This document describes the **test/lab** Docker stack under `docker/multi-server/`.
 
-## 1) Run multi-server + multi-user contract tests
+It is **not** the main Hub deployment stack.
+
+- Use the root `docker-compose.yml` for the real Hub deployment.
+- Use `docker/multi-server/` only when you want disposable Codex CLI containers for contract, integration, or Playwright-assisted testing.
+
+## Hub deployment smoke path
+
+Before using the real Hub stack, prepare the host mounts once:
 
 ```bash
-npm run test:multi-server
+mkdir -p .data/hub docker/local-codex workspace
+cp ~/.codex/auth.json docker/local-codex/auth.json
+chmod 600 docker/local-codex/auth.json
+npm run docker:hub:up
+npm run docker:hub:smoke
 ```
 
-The test suite validates **in-memory helper contracts** (mirroring production API payloads/routes) for:
-- request header injection: `x-codex-server-id`
-- SSE routing URL query: `?serverId=<id>`
-- end-to-end header transmission to an HTTP test server
-- multi-user auth flow: signup/login/session lookup
-- admin-only authorization for user list endpoint
-- server registry scoping by authenticated user
+## What the lab stack does
 
-## 2) Prepare host auth file for Docker
+It starts multiple Codex CLI containers that expose `codex app-server` over websocket endpoints so the Hub can exercise multi-server registration and remote-runtime behavior during testing.
 
-The Docker stack uses an **ephemeral auth file** (default: `/tmp/codexui-multi-server-auth/auth.json`).
+## Files
+
+- `docker/multi-server/Dockerfile.codex-cli`
+- `docker/multi-server/docker-compose.yml`
+- `scripts/docker/prepare-codex-auth.sh`
+- `scripts/docker/multi-server-up.sh`
+- `scripts/docker/multi-server-smoke.sh`
+- `scripts/docker/multi-server-down.sh`
+
+## Auth file handling
+
+The lab stack expects a Codex auth file and uses an ephemeral copy by default:
+
+```text
+/tmp/codexui-multi-server-auth/auth.json
+```
+
+Prepare it with:
 
 ```bash
 npm run docker:multi-server:prepare-auth
 ```
 
-By default this copies from `~/.codex/auth.json`. To override:
+To override the source path:
 
 ```bash
 CODEX_AUTH_FILE=/path/to/auth.json npm run docker:multi-server:prepare-auth
 ```
 
-To override the target location:
+To override the copied target path:
 
 ```bash
 CODEX_MULTI_SERVER_AUTH_FILE=/secure/tmp/auth.json npm run docker:multi-server:prepare-auth
 ```
 
-## 3) Start Codex CLI multi-server containers
+## Start / smoke / stop
 
 ```bash
 npm run docker:multi-server:up
-```
-
-This builds and starts two Codex app-server containers:
-- `ws://127.0.0.1:19101`
-- `ws://127.0.0.1:19102`
-
-## 4) Run Docker smoke verification
-
-```bash
 npm run docker:multi-server:smoke
-```
-
-Smoke checks verify:
-- auth file exists inside each container
-- `codex --version` works in each container
-- both websocket ports are reachable
-
-## 5) Stop containers
-
-```bash
 npm run docker:multi-server:down
 ```
 
-`docker:multi-server:down` also removes the ephemeral auth copy.
+## Endpoints
 
-## 6) Playwright admin UI screenshot verification (Phase 2)
+The disposable lab compose file exposes websocket listeners on:
+
+- `ws://127.0.0.1:19101`
+- `ws://127.0.0.1:19102`
+
+These are intended for automated tests and local experimentation, not for the public Hub deployment.
+
+## UI verification examples
+
+After the Hub itself is running, you can still use Playwright against the UI:
 
 ```bash
 PLAYWRIGHT_PASSWORD='<admin-password>' npm run test:playwright:admin
-```
-
-Optional environment variables:
-- `PLAYWRIGHT_BASE_URL` (default: `http://127.0.0.1:4300`)
-- `PLAYWRIGHT_USERNAME` (default: `admin`)
-- `PLAYWRIGHT_SCREENSHOT_DIR` (default: `.artifacts/screenshots`)
-
-## Notes
-
-- Never store real auth tokens inside the repository tree.
-- Re-run `docker:multi-server:prepare-auth` whenever host auth tokens rotate.
-
-## 7) Settings UI verification
-
-```bash
 npx playwright test tests/playwright/settings-connectors.spec.ts --reporter=line
 ```
-
-This spec verifies:
-- `/settings` route rendering
-- connector creation flow
-- one-time token visibility
-- rename flow
-- token rotation flow
-- delete flow
-- desktop screenshot capture into `.artifacts/screenshots/settings-connectors-desktop.png`
-
-## 8) Connector package contract verification
-
-`npm run test:multi-server` now includes the connector package contract test:
-- `tests/multi-server/relay-connector-package.test.mjs`
-
-The contract verifies:
-- the packaged `dist-cli/connector.js` entry is built
-- relay RPC requests are proxied into the local Codex app-server adapter
-- relay responses are pushed back to the hub transport
-- local notifications are forwarded as relay events
-
-
-## 7) Settings connector UI verification
-
-```bash
-npx playwright test tests/playwright/settings-connectors.spec.ts --reporter=line
-```
-
-This verifies:
-- `/settings` route rendering
-- connector creation
-- rename flow
-- token rotation
-- delete flow
-- screenshot capture to `.artifacts/screenshots/settings-connectors-desktop.png`
-
-## 8) Connector package contract tests
-
-```bash
-node --test tests/multi-server/relay-connector-package.test.mjs
-node --test tests/multi-server/connector-provisioning-package.test.mjs
-```
-
-These tests verify:
-- relay connector request/response forwarding
-- relay notification forwarding
-- hub login + connector provisioning
-- install command generation

@@ -1,5 +1,9 @@
 # Connector Bootstrap Hardening Report
 
+## Operational context
+
+This hardening now ships as part of the Docker-first CodexUI Hub deployment. Operators typically create Connectors from the Hub Settings page and install them onto remote hosts with `codexui-connector`.
+
 Date: 2026-03-07
 
 ## Goal
