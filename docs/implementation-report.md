@@ -129,36 +129,41 @@
 - `b0bb993` Implement connector lifecycle and stats APIs
 - `3f8a7b4` Add settings UI for connector management
 
+### Connector bootstrap hardening addendum
+
+#### Delivered
+- Split connector **bootstrap tokens** from durable relay credentials.
+- Added one-time `POST /codex-api/connectors/:id/bootstrap-exchange` enrollment flow.
+- Enforced reinstall semantics:
+  - bootstrap tokens are single-use and short-lived
+  - `rotate-token` now reissues install state instead of rotating the live credential in place
+  - runtime relay auth only accepts the durable connector credential
+- Updated `codexui-connector` CLI:
+  - `provision` returns bootstrap metadata
+  - `install` exchanges bootstrap token and rewrites the token file with the durable credential
+  - `connect` now clearly represents durable-credential runtime mode
+- Updated Settings UI to show:
+  - `Pending install`
+  - `Connected`
+  - `Offline`
+  - `Expired bootstrap`
+  - `Reinstall required`
+  - bootstrap metadata timestamps and reissue action
+
+#### Validation
+- `node --test tests/multi-server/connector-registration-per-user.test.mjs tests/multi-server/connector-management-contract.test.mjs` ✅
+- `node --test tests/multi-server/connector-provisioning-package.test.mjs tests/multi-server/relay-connector-provisioning.test.mjs` ✅
+- `npx playwright test tests/playwright/settings-connectors.spec.ts --reporter=line` ✅
+
+#### Screenshots
+- `.artifacts/screenshots/settings-connectors-desktop.png`
+- `.artifacts/screenshots/settings-connectors-expired-desktop.png`
+
+#### Milestones
+- `07f0cd5` Split connector bootstrap tokens from relay credentials
+- `861f539` Add bootstrap-aware connector install flow
+- `a1a1381` Show connector bootstrap lifecycle in settings
+
 ## Current status
 - Phase 1–5 implementation track is complete at transport, onboarding, and settings-management level.
 - Hub users now have an explicit registration workflow for both local/relay servers and packaged outbound connectors.
-
-
----
-
-## Phase 5 — Settings + Connector Package
-
-### Delivered
-- Explicit registration-only startup state (no implicit default/local server).
-- Per-user connector registry with bound relay server creation and cleanup.
-- Connector lifecycle APIs:
-  - create
-  - rename
-  - rotate token
-  - delete
-  - stats snapshot exposure
-- Dedicated `/settings` UI for connector management.
-- Packaged `codexui-connector` CLI with:
-  - `provision`
-  - `connect`
-- Connector install command generation and operator docs.
-
-### Validation
-- `npm run build` ✅
-- `npm run test:multi-server` ✅
-- `npx playwright test tests/playwright/settings-connectors.spec.ts --reporter=line` ✅
-
-### Notes
-- Connector status counts are derived through relay `thread/list` calls and cached per connector.
-- Offline connectors expose stale snapshots via `statsStale` so the UI can distinguish cached state from live state.
-- Suggested install commands now use `--token-file`, and non-local hubs require HTTPS by default.

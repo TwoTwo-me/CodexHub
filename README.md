@@ -82,11 +82,11 @@ termux-wake-lock
 - 🖥️ Browser-first Codex UI flow on `http://localhost:18923`
 - 🌐 LAN-friendly access from other devices on the same network
 - 🧭 Explicit server registration model (no surprise default server)
-- ⚙️ Settings screen for connector registration, status, rename, rotate-token, and delete
+- ⚙️ Settings screen for connector registration, bootstrap state, rename, reissue install token, and delete
 - 🔌 Packaged `codexui-connector` CLI for outbound relay hosts
 - 🧪 Remote/headless-friendly setup for server-based Codex usage
 - 🔌 Works with reverse proxies and tunneling setups
-- 🔗 Dedicated Settings screen for connector registration, status, token rotation, and deletion
+- 🔗 Dedicated Settings screen for connector registration, bootstrap lifecycle, and deletion
 - 🌐 Outbound relay connector package (`codexui-connector`) for remote server onboarding
 - ⚡ No global install required for quick experimentation
 - 🎙️ Built-in hold-to-dictate voice input with transcription to composer draft
@@ -113,7 +113,9 @@ termux-wake-lock
 ## 📘 Implementation Report
 
 - Multi-stage delivery report (Multi-server, Multi-user, Outbound relay, E2EE):  
-  [`docs/implementation-report.md`](docs/implementation-report.md)
+ [`docs/implementation-report.md`](docs/implementation-report.md)
+- Connector bootstrap hardening report:  
+  [`docs/connector-bootstrap-hardening-report.md`](docs/connector-bootstrap-hardening-report.md)
 
 
 ## 🔗 Hub + Connector Onboarding
@@ -123,8 +125,9 @@ CodexUI can now run as a central **hub** with user-scoped remote **connectors**.
 ### From the web UI
 1. Open **Settings**
 2. Create a connector
-3. Reveal the one-time token and save it to a secure file on the remote host
-4. Run the suggested `--token-file` install command
+3. Reveal the one-time bootstrap token and save it to a secure file on the remote host
+4. Run the suggested `codexui-connector install --token-file ...` command
+5. Start the daemon with `codexui-connector connect --token-file ...` (or use `install --run`)
 
 ### From a terminal
 ```bash
@@ -137,16 +140,21 @@ read -sr CODEXUI_HUB_PASSWORD && printf '%s' "$CODEXUI_HUB_PASSWORD" | \
     --name 'Alice Edge Laptop'
 ```
 
-Then save the issued token to a secure file and start the remote connector:
+Then save the issued bootstrap token to a secure file and install the remote connector:
 
 ```bash
-install -d -m 700 ~/.codexui-connector
-printf '%s' '<one-time-token>' > ~/.codexui-connector/edge-laptop.token
-chmod 600 ~/.codexui-connector/edge-laptop.token
+install -d -m 700 $HOME/.codexui-connector
+printf '%s' '<bootstrap-token>' > $HOME/.codexui-connector/edge-laptop.token
+chmod 600 $HOME/.codexui-connector/edge-laptop.token
+npx codexui-connector install \
+  --hub https://hub.example.com \
+  --connector edge-laptop \
+  --token-file $HOME/.codexui-connector/edge-laptop.token
+# token file is rewritten with the durable credential
 npx codexui-connector connect \
   --hub https://hub.example.com \
   --connector edge-laptop \
-  --token-file ~/.codexui-connector/edge-laptop.token
+  --token-file $HOME/.codexui-connector/edge-laptop.token
 ```
 
 Detailed guides:
@@ -165,8 +173,9 @@ CodexUI now uses an **explicit registration** model:
 1. Sign in to the hub.
 2. Open **Settings** in the sidebar.
 3. Create a connector.
-4. Reveal the one-time token and save it to a secure file on the target host.
-5. Run the suggested `--token-file` command.
+4. Reveal the one-time bootstrap token and save it to a secure file on the target host.
+5. Run the suggested `install --token-file` command.
+6. Start the runtime with `connect --token-file` (or use `install --run`).
 
 ### Connector CLI flow
 
@@ -182,16 +191,21 @@ node dist-cli/connector.js provision \
   --name "Build Runner"
 ```
 
-Connect with an issued token saved to a file:
+Install from an issued bootstrap token saved to a file:
 
 ```bash
-install -d -m 700 ~/.codexui-connector
-printf '%s' '<one-time-token>' > ~/.codexui-connector/build-runner.token
-chmod 600 ~/.codexui-connector/build-runner.token
+install -d -m 700 $HOME/.codexui-connector
+printf '%s' '<bootstrap-token>' > $HOME/.codexui-connector/build-runner.token
+chmod 600 $HOME/.codexui-connector/build-runner.token
+node dist-cli/connector.js install \
+  --hub https://hub.example.com \
+  --connector build-runner \
+  --token-file $HOME/.codexui-connector/build-runner.token
+# same file now stores the durable relay credential
 node dist-cli/connector.js connect \
   --hub https://hub.example.com \
   --connector build-runner \
-  --token-file ~/.codexui-connector/build-runner.token
+  --token-file $HOME/.codexui-connector/build-runner.token
 ```
 
 More details:
@@ -245,7 +259,8 @@ More details:
         ▼           ▼
 ┌──────────────┐  ┌──────────────────────┐
 │ Codex server │  │ codexui-connector    │
-│ (local)      │  │ + Codex app-server   │
+│ (local)      │  │ install + connect    │
+│              │  │ + Codex app-server   │
 └──────────────┘  └──────────────────────┘
 ```
 

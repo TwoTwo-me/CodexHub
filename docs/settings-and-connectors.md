@@ -1,6 +1,6 @@
 # Settings + Connectors
 
-This phase introduces a dedicated **Settings** screen for connector lifecycle management.
+This phase introduces a dedicated **Settings** screen for connector lifecycle management, including bootstrap install state and reinstall flows.
 
 ## Scope
 
@@ -25,18 +25,24 @@ Hub
 ### 2. `/settings` route
 - Added a dedicated Settings page in the left navigation.
 - The page loads connector data from `GET /codex-api/connectors?includeStats=1`.
-- The content area keeps the existing session controls while the Settings panel handles connector CRUD.
+- The content area keeps the existing session controls while the Settings panel handles connector CRUD and bootstrap lifecycle state.
 
-### 3. Connector management UI
+### 3. Connector lifecycle UI
 The Settings page supports:
 - Create connector
 - Inspect connector metadata
 - Rename connector
-- Rotate one-time install token
+- **Reissue install token** (reinstall flow)
 - Delete connector
-- View connection status (`Connected` / `Offline`)
+- View install state:
+  - `Pending install`
+  - `Connected`
+  - `Offline`
+  - `Expired bootstrap`
+  - `Reinstall required`
 - View counts (`projects`, `threads`)
 - View last-seen timestamp
+- View bootstrap metadata (`issued`, `expires`, `consumed`, `credential issued`)
 
 ### 4. Server binding model
 Each connector now owns a relay-backed server record:
@@ -54,6 +60,7 @@ Deleting a connector removes the bound server and disposes the runtime entry for
 - `PATCH /codex-api/connectors/:id`
 - `POST /codex-api/connectors/:id/rotate-token`
 - `DELETE /codex-api/connectors/:id`
+- `POST /codex-api/connectors/:id/bootstrap-exchange`
 
 ### Returned fields
 Connector payloads now expose:
@@ -62,6 +69,11 @@ Connector payloads now expose:
 - `name`
 - `hubAddress`
 - `relayAgentId`
+- `installState`
+- `bootstrapIssuedAtIso`
+- `bootstrapExpiresAtIso`
+- `bootstrapConsumedAtIso`
+- `credentialIssuedAtIso`
 - `connected`
 - `lastSeenAtIso`
 - `projectCount`
@@ -69,6 +81,25 @@ Connector payloads now expose:
 - `lastStatsAtIso`
 - `statsStale`
 - optional `relayE2eeKeyId`
+
+## Bootstrap security model
+
+### Create / reissue
+- `POST /codex-api/connectors` returns a **bootstrap token**.
+- `POST /codex-api/connectors/:id/rotate-token` invalidates the current durable credential and issues a fresh bootstrap token.
+
+### Exchange
+- `POST /codex-api/connectors/:id/bootstrap-exchange` is the one-time enrollment step.
+- The connector presents the bootstrap token as a bearer token.
+- The hub returns a **durable relay credential**.
+- Replaying the same bootstrap token is rejected.
+- Expired bootstrap tokens are rejected.
+
+### Runtime
+- Only the durable relay credential is accepted by:
+  - `POST /codex-api/relay/agent/connect`
+  - `GET /codex-api/relay/agent/pull`
+  - `POST /codex-api/relay/agent/push`
 
 ## Status and count behavior
 
@@ -78,33 +109,26 @@ Connector payloads now expose:
 - The hub stores the latest successful snapshot in the connector registry.
 - If the connector is offline, the last snapshot is exposed with `statsStale: true`.
 
-## UI notes
-
-### New thread behavior
-- New thread still requires explicit server selection.
-- When no servers are registered, the home screen shows the registration-required empty state.
-
-### Existing threads
-- Existing thread pages remain read-only with respect to server selection.
-- Settings is the central place for connector lifecycle operations.
-
 ## Recommended operator flow
 
 1. Open **Settings**
 2. Create a connector
-3. Reveal the one-time install token and save it to a secure file on the remote host
-4. Run the suggested `--token-file` install command
-5. Return to Settings to confirm:
+3. Reveal the bootstrap token once and save it to a secure file on the remote host
+4. Run the suggested `codexui-connector install --token-file ...` command
+5. Start the connector with `codexui-connector connect --token-file ...` (or use `install --run`)
+6. Return to Settings to confirm:
+   - install state
    - online state
    - project count
    - thread count
-6. Rotate the token when reinstalling or revoking a connector
+7. Use **Reissue install token** when reinstalling or revoking a connector
 
 ## Security guardrails
 
 - Non-local hub addresses must use **HTTPS**.
-- The Settings panel now keeps the token masked until the operator explicitly reveals it.
-- Suggested install commands use `--token-file` so the token does not need to appear in shell history.
+- Bootstrap tokens are masked until the operator explicitly reveals them.
+- Suggested install commands use `--token-file` so secrets do not need to appear in shell history.
+- Bootstrap tokens are one-time and short-lived; the durable credential is issued only after successful exchange.
 
 ## Related docs
 - [`docs/connector-package.md`](./connector-package.md)
