@@ -48,8 +48,10 @@ test('connector provisioning reuses the session cookie returned by /auth/login',
             name: 'Remote Alpha',
             hubAddress: 'http://127.0.0.1:0',
             relayAgentId: 'agent-remote-alpha',
+            installState: 'pending_install',
+            bootstrapExpiresAtIso: '2026-03-07T00:15:00.000Z',
           },
-          token: 'issued-token-123',
+          bootstrapToken: 'issued-token-123',
         },
       }))
       return
@@ -73,9 +75,10 @@ test('connector provisioning reuses the session cookie returned by /auth/login',
       connectorName: 'Remote Alpha',
     })
 
-    assert.equal(result.token, 'issued-token-123')
+    assert.equal(result.bootstrapToken, 'issued-token-123')
     assert.equal(result.connector.id, 'remote-alpha')
     assert.equal(result.connector.name, 'Remote Alpha')
+    assert.equal(result.connector.installState, 'pending_install')
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => {

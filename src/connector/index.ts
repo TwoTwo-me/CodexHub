@@ -1,10 +1,9 @@
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { Command } from 'commander'
 import { fileURLToPath } from 'node:url'
-import { dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { LocalCodexAppServer } from './localCodexAppServer.js'
 import {
@@ -92,11 +91,11 @@ function buildAuthorizationHeader(token: string): Record<string, string> {
 }
 
 export function createConnectorInstallCommand(
-  input: { hubAddress: string; connectorId: string; token?: string; relayE2eeKeyId?: string; tokenFilePath?: string },
+  input: { hubAddress: string; connectorId: string; relayE2eeKeyId?: string; tokenFilePath?: string },
 ): string {
   const tokenFilePath = input.tokenFilePath?.trim() || `~/.codexui-connector/${input.connectorId}.token`
   const parts = [
-    'npx codexui-connector connect',
+    'npx codexui-connector install',
     `--hub ${JSON.stringify(input.hubAddress)}`,
     `--connector ${JSON.stringify(input.connectorId)}`,
     `--token-file ${JSON.stringify(tokenFilePath)}`,
@@ -222,8 +221,10 @@ export async function provisionConnectorRegistration(input: ProvisionConnectorIn
     hubAddress: string
     relayAgentId: string
     relayE2eeKeyId?: string
+    installState?: string
+    bootstrapExpiresAtIso?: string
   }
-  token: string
+  bootstrapToken: string
 }> {
   const hubAddress = normalizeHubAddress(input.hubAddress, {
     allowInsecureHttp: input.allowInsecureHttp === true,
@@ -281,7 +282,11 @@ export async function provisionConnectorRegistration(input: ProvisionConnectorIn
   const connector = data && typeof data.connector === 'object' && !Array.isArray(data.connector)
     ? data.connector as Record<string, unknown>
     : null
-  const token = typeof data?.token === 'string' ? data.token.trim() : ''
+  const bootstrapToken = typeof data?.bootstrapToken === 'string' ? data.bootstrapToken.trim() : ''
+  const installState = typeof connector?.installState === 'string' ? connector.installState.trim() : undefined
+  const bootstrapExpiresAtIso = typeof connector?.bootstrapExpiresAtIso === 'string'
+    ? connector.bootstrapExpiresAtIso.trim()
+    : undefined
 
   const connectorId = typeof connector?.id === 'string' ? connector.id.trim() : ''
   const serverId = typeof connector?.serverId === 'string' ? connector.serverId.trim() : connectorId
@@ -289,7 +294,7 @@ export async function provisionConnectorRegistration(input: ProvisionConnectorIn
   const relayAgentId = typeof connector?.relayAgentId === 'string' ? connector.relayAgentId.trim() : ''
   const relayE2eeKeyId = typeof connector?.relayE2eeKeyId === 'string' ? connector.relayE2eeKeyId.trim() : undefined
 
-  if (!connectorId || !name || !relayAgentId || !token) {
+  if (!connectorId || !name || !relayAgentId || !bootstrapToken) {
     throw new Error('Connector provisioning returned an incomplete response')
   }
 
@@ -301,8 +306,150 @@ export async function provisionConnectorRegistration(input: ProvisionConnectorIn
       hubAddress,
       relayAgentId,
       ...(relayE2eeKeyId ? { relayE2eeKeyId } : {}),
+      ...(installState ? { installState } : {}),
+      ...(bootstrapExpiresAtIso ? { bootstrapExpiresAtIso } : {}),
     },
-    token,
+    bootstrapToken,
+  }
+}
+
+export async function writeConnectorTokenFile(path: string, token: string): Promise<void> {
+  const normalizedPath = path.trim()
+  if (!normalizedPath) {
+    throw new Error('A token file path is required.')
+  }
+  await mkdir(dirname(normalizedPath), { recursive: true, mode: 0o700 })
+  await writeFile(normalizedPath, token.trim(), { encoding: 'utf8', mode: 0o600 })
+}
+
+export async function exchangeConnectorBootstrap(input: {
+  hubAddress: string
+  connectorId: string
+  bootstrapToken: string
+  allowInsecureHttp?: boolean
+}): Promise<{
+  connector: {
+    id: string
+    serverId: string
+    name: string
+    hubAddress: string
+    relayAgentId: string
+    relayE2eeKeyId?: string
+    installState?: string
+    credentialIssuedAtIso?: string
+  }
+  credentialToken: string
+}> {
+  const hubAddress = normalizeHubAddress(input.hubAddress, {
+    allowInsecureHttp: input.allowInsecureHttp === true,
+  })
+  if (!hubAddress) {
+    throw createHubAddressError()
+  }
+
+  const response = await fetch(`${hubAddress}/codex-api/connectors/${encodeURIComponent(input.connectorId)}/bootstrap-exchange`, {
+    method: 'POST',
+    headers: {
+      ...buildAuthorizationHeader(input.bootstrapToken),
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      connectorVersion: await readConnectorVersion(),
+      platform: process.platform,
+      hostname: process.env.HOSTNAME ?? '',
+    }),
+  })
+  const payload = await parseJsonResponse(response)
+  if (!response.ok) {
+    const fallback = `Bootstrap exchange failed with HTTP ${String(response.status)}`
+    const baseMessage = createHttpErrorMessage(payload, fallback)
+    const guidance = response.status === 409 || response.status === 410
+      ? ' Reissue a new install token from Settings and retry.'
+      : ''
+    throw new Error(`${baseMessage}${guidance}`)
+  }
+
+  const envelope = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null
+  const data = envelope && typeof envelope.data === 'object' && !Array.isArray(envelope.data)
+    ? envelope.data as Record<string, unknown>
+    : null
+  const connector = data && typeof data.connector === 'object' && !Array.isArray(data.connector)
+    ? data.connector as Record<string, unknown>
+    : null
+  const credentialToken = typeof data?.credentialToken === 'string' ? data.credentialToken.trim() : ''
+
+  const connectorId = typeof connector?.id === 'string' ? connector.id.trim() : ''
+  const serverId = typeof connector?.serverId === 'string' ? connector.serverId.trim() : connectorId
+  const name = typeof connector?.name === 'string' ? connector.name.trim() : ''
+  const relayAgentId = typeof connector?.relayAgentId === 'string' ? connector.relayAgentId.trim() : ''
+  const relayE2eeKeyId = typeof connector?.relayE2eeKeyId === 'string' ? connector.relayE2eeKeyId.trim() : undefined
+  const installState = typeof connector?.installState === 'string' ? connector.installState.trim() : undefined
+  const credentialIssuedAtIso = typeof connector?.credentialIssuedAtIso === 'string'
+    ? connector.credentialIssuedAtIso.trim()
+    : undefined
+
+  if (!connectorId || !name || !relayAgentId || !credentialToken) {
+    throw new Error('Bootstrap exchange returned an incomplete response')
+  }
+
+  return {
+    connector: {
+      id: connectorId,
+      serverId,
+      name,
+      hubAddress,
+      relayAgentId,
+      ...(relayE2eeKeyId ? { relayE2eeKeyId } : {}),
+      ...(installState ? { installState } : {}),
+      ...(credentialIssuedAtIso ? { credentialIssuedAtIso } : {}),
+    },
+    credentialToken,
+  }
+}
+
+export async function installConnectorFromBootstrap(input: {
+  hubAddress: string
+  connectorId: string
+  bootstrapToken?: string
+  tokenFile?: string
+  tokenStdin?: boolean
+  allowInsecureHttp?: boolean
+}): Promise<{
+  connector: {
+    id: string
+    serverId: string
+    name: string
+    hubAddress: string
+    relayAgentId: string
+    relayE2eeKeyId?: string
+    installState?: string
+    credentialIssuedAtIso?: string
+  }
+  credentialToken: string
+  tokenFilePath?: string
+}> {
+  const bootstrapToken = await resolveInstallToken({
+    token: input.bootstrapToken,
+    tokenFile: input.tokenFile,
+    tokenStdin: input.tokenStdin,
+  })
+  const exchanged = await exchangeConnectorBootstrap({
+    hubAddress: input.hubAddress,
+    connectorId: input.connectorId,
+    bootstrapToken,
+    allowInsecureHttp: input.allowInsecureHttp === true,
+  })
+
+  if (input.tokenFile?.trim()) {
+    await writeConnectorTokenFile(input.tokenFile.trim(), exchanged.credentialToken)
+  }
+
+  return {
+    ...exchanged,
+    ...(input.tokenFile?.trim() ? { tokenFilePath: input.tokenFile.trim() } : {}),
   }
 }
 
@@ -391,6 +538,18 @@ async function resolveConnectToken(options: {
   return token
 }
 
+async function resolveInstallToken(options: {
+  token?: string
+  tokenFile?: string
+  tokenStdin?: boolean
+}): Promise<string> {
+  const token = await resolveConnectToken(options)
+  if (!token) {
+    throw new Error('No bootstrap token was provided.')
+  }
+  return token
+}
+
 async function resolveProvisionPassword(options: {
   password?: string
   passwordStdin?: boolean
@@ -422,7 +581,7 @@ async function runCli(argv: string[]): Promise<void> {
     .version(version)
 
   program.command('connect')
-    .description('Connect a remote Codex host to a CodexUI hub using a relay token')
+    .description('Connect a remote Codex host to a CodexUI hub using a durable relay credential')
     .requiredOption('--hub <url>', 'CodexUI hub base URL')
     .requiredOption('--connector <id>', 'Connector identifier (for logging)')
     .option('--token <token>', 'Connector relay token (least secure)')
@@ -458,6 +617,72 @@ async function runCli(argv: string[]): Promise<void> {
         allowInsecureHttp: options.allowInsecureHttp === true,
         verbose: options.verbose === true,
       })
+    })
+
+  program.command('install')
+    .description('Exchange a one-time bootstrap token for a durable connector credential')
+    .requiredOption('--hub <url>', 'CodexUI hub base URL')
+    .requiredOption('--connector <id>', 'Connector identifier')
+    .option('--token <token>', 'Bootstrap token (least secure)')
+    .option('--token-file <path>', 'Read and rewrite the bootstrap token file in place')
+    .option('--token-stdin', 'Read the bootstrap token from stdin')
+    .option('--key-id <keyId>', 'Relay E2EE key id')
+    .option('--passphrase <passphrase>', 'Relay E2EE passphrase')
+    .option('--run', 'Immediately start the connector after installing the durable credential', false)
+    .option('--allow-insecure-http', 'Allow plaintext HTTP for non-loopback hubs (lab use only)', false)
+    .option('--verbose', 'Enable verbose logging', false)
+    .action(async (options: {
+      hub: string
+      connector: string
+      token?: string
+      tokenFile?: string
+      tokenStdin?: boolean
+      keyId?: string
+      passphrase?: string
+      run?: boolean
+      allowInsecureHttp?: boolean
+      verbose?: boolean
+    }) => {
+      const installed = await installConnectorFromBootstrap({
+        hubAddress: options.hub,
+        connectorId: options.connector,
+        bootstrapToken: options.token,
+        tokenFile: options.tokenFile,
+        tokenStdin: options.tokenStdin === true,
+        allowInsecureHttp: options.allowInsecureHttp === true,
+      })
+
+      const connectCommand = [
+        'npx codexui-connector connect',
+        `--hub ${JSON.stringify(options.hub)}`,
+        `--connector ${JSON.stringify(options.connector)}`,
+        ...(options.tokenFile?.trim() ? [`--token-file ${JSON.stringify(options.tokenFile.trim())}`] : ['--token-stdin']),
+      ].join(' ')
+
+      console.log('Connector bootstrap exchange complete.\n')
+      console.log(`Connector: ${installed.connector.name} (${installed.connector.id})`)
+      if (installed.tokenFilePath) {
+        console.log(`Credential file updated: ${installed.tokenFilePath}`)
+      }
+      console.log('\nStart or restart the connector with:')
+      console.log(connectCommand)
+
+      if (options.run) {
+        const relayE2ee = options.keyId && options.passphrase
+          ? {
+              keyId: options.keyId,
+              passphrase: options.passphrase,
+            }
+          : undefined
+        await runConnectorLoop({
+          hubAddress: options.hub,
+          token: installed.credentialToken,
+          connectorId: options.connector,
+          ...(relayE2ee ? { relayE2ee } : {}),
+          allowInsecureHttp: options.allowInsecureHttp === true,
+          verbose: options.verbose === true,
+        })
+      }
     })
 
   program.command('provision')
@@ -506,19 +731,25 @@ async function runCli(argv: string[]): Promise<void> {
       if (options.json) {
         console.log(JSON.stringify({
           connector: provisioned.connector,
-          token: provisioned.token,
+          bootstrapToken: provisioned.bootstrapToken,
           installCommand,
         }, null, 2))
       } else {
         console.log('Connector registered successfully.\n')
         console.log(`Connector: ${provisioned.connector.name} (${provisioned.connector.id})`)
         console.log(`Hub:       ${provisioned.connector.hubAddress}`)
-        console.log('\nSave the one-time token to a secure file on the connector host, then run:')
+        console.log('\nSave the one-time bootstrap token to a secure file on the connector host, then run:')
         console.log(installCommand)
         console.log('\nUse --json if you need to capture the token programmatically, or --run to connect immediately on this host.')
       }
 
       if (options.run) {
+        const installed = await installConnectorFromBootstrap({
+          hubAddress: provisioned.connector.hubAddress,
+          connectorId: provisioned.connector.id,
+          bootstrapToken: provisioned.bootstrapToken,
+          allowInsecureHttp: options.allowInsecureHttp === true,
+        })
         const relayE2ee = options.keyId && options.passphrase
           ? {
               keyId: options.keyId,
@@ -527,7 +758,7 @@ async function runCli(argv: string[]): Promise<void> {
           : undefined
         await runConnectorLoop({
           hubAddress: provisioned.connector.hubAddress,
-          token: provisioned.token,
+          token: installed.credentialToken,
           connectorId: provisioned.connector.id,
           ...(relayE2ee ? { relayE2ee } : {}),
           allowInsecureHttp: options.allowInsecureHttp === true,
