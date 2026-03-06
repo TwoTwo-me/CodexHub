@@ -183,3 +183,25 @@ After each feature implementation session that uses this skill:
 - In web parity mode, absolute local paths in markdown image URLs need explicit server mediation; browser runtime does not resolve `/Users/...` as local files.
 - A dedicated local image endpoint (`/codex-local-image?path=...`) is required for parity-like rendering of absolute filesystem image paths in browser-delivered UI.
 - Express `sendFile` must allow dot-directory segments (`dotfiles: 'allow'`) or paths under `~/.codex/...` return 404 despite existing files.
+
+## Findings: Composer Enter Behavior (2026-03-05)
+
+- Codex.app composer input is rich-text/multiline (`ProseMirror`-based), not single-line.
+- Enter handling is configurable (`enterBehavior`):
+  - `enter` submits by default.
+  - `newline` inserts a newline on Enter.
+  - `cmdIfMultiline` inserts newline when multiline, otherwise submits.
+- Newline shortcuts are explicitly bound:
+  - `Shift-Enter` inserts newline.
+  - `Alt-Enter` inserts newline.
+  - `Mod-Enter` submits.
+- This confirms multiline composition parity requires newline-capable input plus explicit Enter-vs-newline key handling.
+
+## Findings: Composer `@` Mentions (2026-03-05)
+
+- Codex.app uses a dedicated mention trigger plugin for `@` with pattern `/(^|\s)(@[^\s@]*)$/`, so mentions activate at word boundaries and stop on whitespace or a second `@`.
+- Mention entries are stored as an inline `mention-ui` node with attrs `{ label, path, fsPath }`, rendered with data attributes `at-mention-label`, `at-mention-path`, and `at-mention-fs-path`.
+- Mention picker keyboard behavior includes:
+  - `Escape` closes mention UI.
+  - `Enter` and `Tab` commit the highlighted mention.
+- Composer placeholder copy in local mode explicitly documents this affordance: `Ask Codex anything, @ to add files, / for commands`.

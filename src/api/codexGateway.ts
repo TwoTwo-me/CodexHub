@@ -282,6 +282,20 @@ export async function startThread(cwd?: string, model?: string): Promise<string>
   }
 }
 
+export type FileAttachmentParam = { label: string; path: string; fsPath: string }
+
+function buildTextWithAttachments(
+  prompt: string,
+  files: FileAttachmentParam[],
+): string {
+  if (files.length === 0) return prompt
+  let prefix = '# Files mentioned by the user:\n'
+  for (const f of files) {
+    prefix += `\n## ${f.label}: ${f.path}\n`
+  }
+  return `${prefix}\n## My request for Codex:\n\n${prompt}\n`
+}
+
 export async function startThreadTurn(
   threadId: string,
   text: string,
@@ -289,9 +303,11 @@ export async function startThreadTurn(
   model?: string,
   effort?: ReasoningEffort,
   skills?: Array<{ name: string; path: string }>,
+  fileAttachments: FileAttachmentParam[] = [],
 ): Promise<void> {
   try {
-    const input: Array<Record<string, unknown>> = [{ type: 'text', text }]
+    const finalText = buildTextWithAttachments(text, fileAttachments)
+    const input: Array<Record<string, unknown>> = [{ type: 'text', text: finalText }]
     for (const imageUrl of imageUrls) {
       const normalizedUrl = imageUrl.trim()
       if (!normalizedUrl) continue
@@ -306,10 +322,12 @@ export async function startThreadTurn(
         input.push({ type: 'skill', name: skill.name, path: skill.path })
       }
     }
+    const attachments = fileAttachments.map((f) => ({ label: f.label, path: f.path, fsPath: f.fsPath }))
     const params: Record<string, unknown> = {
       threadId,
       input,
     }
+    if (attachments.length > 0) params.attachments = attachments
     if (typeof model === 'string' && model.length > 0) {
       params.model = model
     }
@@ -612,5 +630,18 @@ export async function getSkillsList(cwds?: string[]): Promise<SkillInfo[]> {
     return skills
   } catch {
     return []
+  }
+}
+
+export async function uploadFile(file: File): Promise<string | null> {
+  try {
+    const form = new FormData()
+    form.append('file', file)
+    const resp = await fetch('/codex-api/upload-file', { method: 'POST', body: form })
+    if (!resp.ok) return null
+    const data = (await resp.json()) as { path?: string }
+    return data.path ?? null
+  } catch {
+    return null
   }
 }

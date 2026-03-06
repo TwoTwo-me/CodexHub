@@ -691,7 +691,8 @@ export function useDesktopState() {
   const liveReasoningTextByThreadId = ref<Record<string, string>>({})
   const liveCommandsByThreadId = ref<Record<string, UiMessage[]>>({})
   const inProgressById = ref<Record<string, boolean>>({})
-  type QueuedMessage = { id: string; text: string; imageUrls: string[]; skills: Array<{ name: string; path: string }> }
+  type FileAttachment = { label: string; path: string; fsPath: string }
+  type QueuedMessage = { id: string; text: string; imageUrls: string[]; skills: Array<{ name: string; path: string }>; fileAttachments: FileAttachment[] }
   const queuedMessagesByThreadId = ref<Record<string, QueuedMessage[]>>({})
   const eventUnreadByThreadId = ref<Record<string, boolean>>({})
   const availableModelIds = ref<string[]>([])
@@ -2101,10 +2102,11 @@ export function useDesktopState() {
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
     mode: 'steer' | 'queue' = 'steer',
+    fileAttachments: FileAttachment[] = [],
   ): Promise<void> {
     const threadId = selectedThreadId.value
     const nextText = text.trim()
-    if (!threadId || (!nextText && imageUrls.length === 0)) return
+    if (!threadId || (!nextText && imageUrls.length === 0 && fileAttachments.length === 0)) return
 
     const isInProgress = inProgressById.value[threadId] === true
 
@@ -2113,14 +2115,14 @@ export function useDesktopState() {
       const id = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       queuedMessagesByThreadId.value = {
         ...queuedMessagesByThreadId.value,
-        [threadId]: [...queue, { id, text: nextText, imageUrls, skills }],
+        [threadId]: [...queue, { id, text: nextText, imageUrls, skills, fileAttachments }],
       }
       return
     }
 
     if (isInProgress) {
       shouldAutoScrollOnNextAgentEvent = true
-      void startTurnForThread(threadId, nextText, imageUrls, skills).catch((unknownError) => {
+      void startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments).catch((unknownError) => {
         const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         setTurnErrorForThread(threadId, errorMessage)
         error.value = errorMessage
@@ -2139,7 +2141,7 @@ export function useDesktopState() {
     setThreadInProgress(threadId, true)
 
     try {
-      await startTurnForThread(threadId, nextText, imageUrls, skills)
+      await startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments)
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
       setThreadInProgress(threadId, false)
@@ -2156,11 +2158,12 @@ export function useDesktopState() {
     cwd: string,
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
+    fileAttachments: FileAttachment[] = [],
   ): Promise<string> {
     const nextText = text.trim()
     const targetCwd = cwd.trim()
     const selectedModel = selectedModelId.value.trim()
-    if (!nextText && imageUrls.length === 0) return ''
+    if (!nextText && imageUrls.length === 0 && fileAttachments.length === 0) return ''
 
     isSendingMessage.value = true
     error.value = ''
@@ -2187,7 +2190,7 @@ export function useDesktopState() {
       const capturedThreadId = threadId
       const capturedCwd = targetCwd || null
       const capturedPrompt = nextText
-      void startTurnForThread(threadId, nextText, imageUrls, skills)
+      void startTurnForThread(threadId, nextText, imageUrls, skills, fileAttachments)
         .catch((unknownError) => {
           shouldAutoScrollOnNextAgentEvent = false
           setThreadInProgress(threadId, false)
@@ -2222,6 +2225,7 @@ export function useDesktopState() {
     nextText: string,
     imageUrls: string[] = [],
     skills: Array<{ name: string; path: string }> = [],
+    fileAttachments: FileAttachment[] = [],
   ): Promise<void> {
     const modelId = selectedModelId.value.trim()
     const reasoningEffort = selectedReasoningEffort.value
@@ -2238,6 +2242,7 @@ export function useDesktopState() {
         modelId || undefined,
         reasoningEffort || undefined,
         skills.length > 0 ? skills : undefined,
+        fileAttachments,
       )
 
       resumedThreadById.value = {
@@ -2268,7 +2273,7 @@ export function useDesktopState() {
     setTurnErrorForThread(threadId, null)
     setThreadInProgress(threadId, true)
     try {
-      await startTurnForThread(threadId, next.text, next.imageUrls, next.skills)
+      await startTurnForThread(threadId, next.text, next.imageUrls, next.skills, next.fileAttachments)
     } catch {
       setThreadInProgress(threadId, false)
       setTurnActivityForThread(threadId, null)
@@ -2690,7 +2695,7 @@ export function useDesktopState() {
     const msg = queue.find((m) => m.id === messageId)
     if (!msg) return
     removeQueuedMessage(messageId)
-    void sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, 'steer')
+    void sendMessageToSelectedThread(msg.text, msg.imageUrls, msg.skills, 'steer', msg.fileAttachments)
   }
 
   return {

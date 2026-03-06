@@ -136,6 +136,7 @@
               </div>
 
               <ThreadComposer :active-thread-id="composerThreadContextId"
+                :cwd="composerCwd"
                 :models="availableModelIds" :selected-model="selectedModelId"
                 :selected-reasoning-effort="selectedReasoningEffort" :skills="installedSkills"
                 :is-turn-in-progress="false"
@@ -164,6 +165,7 @@
                   @delete="removeQueuedMessage"
                 />
                 <ThreadComposer :active-thread-id="composerThreadContextId"
+                  :cwd="composerCwd"
                   :models="availableModelIds"
                   :selected-model="selectedModelId" :selected-reasoning-effort="selectedReasoningEffort"
                   :skills="installedSkills"
@@ -320,6 +322,10 @@ const filteredMessages = computed(() =>
 )
 const liveOverlay = computed(() => selectedLiveOverlay.value)
 const composerThreadContextId = computed(() => (isHomeRoute.value ? '__new-thread__' : selectedThreadId.value))
+const composerCwd = computed(() => {
+  if (isHomeRoute.value) return newThreadCwd.value.trim()
+  return selectedThread.value?.cwd?.trim() ?? ''
+})
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThread.value?.inProgress === true)
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeyDown)
@@ -424,13 +430,13 @@ function onWindowKeyDown(event: KeyboardEvent): void {
   setSidebarCollapsed(!isSidebarCollapsed.value)
 }
 
-function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; skills: Array<{ name: string; path: string }>; mode: 'steer' | 'queue' }): void {
+function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fileAttachments: Array<{ label: string; path: string; fsPath: string }>; skills: Array<{ name: string; path: string }>; mode: 'steer' | 'queue' }): void {
   const text = payload.text
   if (isHomeRoute.value) {
-    void submitFirstMessageForNewThread(text, payload.imageUrls, payload.skills)
+    void submitFirstMessageForNewThread(text, payload.imageUrls, payload.skills, payload.fileAttachments)
     return
   }
-  void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode)
+  void sendMessageToSelectedThread(text, payload.imageUrls, payload.skills, payload.mode, payload.fileAttachments)
 }
 
 function onSelectModel(modelId: string): void {
@@ -563,9 +569,10 @@ async function submitFirstMessageForNewThread(
   text: string,
   imageUrls: string[] = [],
   skills: Array<{ name: string; path: string }> = [],
+  fileAttachments: Array<{ label: string; path: string; fsPath: string }> = [],
 ): Promise<void> {
   try {
-    const threadId = await sendMessageToNewThread(text, newThreadCwd.value, imageUrls, skills)
+    const threadId = await sendMessageToNewThread(text, newThreadCwd.value, imageUrls, skills, fileAttachments)
     if (!threadId) return
     await router.replace({ name: 'thread', params: { threadId } })
   } catch {
