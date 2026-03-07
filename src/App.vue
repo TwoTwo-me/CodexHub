@@ -67,6 +67,17 @@
         </button>
 
         <button
+          v-if="!isSidebarCollapsed"
+          class="sidebar-skills-link"
+          :class="{ 'is-active': isHooksRoute }"
+          type="button"
+          @click="router.push({ name: 'hooks' }); isMobile && setSidebarCollapsed(true)"
+        >
+          <span>Hooks</span>
+          <span v-if="pendingHookCount > 0" class="sidebar-alert-badge">{{ pendingHookCount }}</span>
+        </button>
+
+        <button
           v-if="!isSidebarCollapsed && isAdminUser"
           class="sidebar-skills-link"
           :class="{ 'is-active': isAdminRoute }"
@@ -82,6 +93,9 @@
           :selected-server-id="selectedServerId"
           :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
           :search-query="sidebarSearchQuery"
+          :has-pending-hooks="hasPendingHooks"
+          :hook-count-by-project-name="hookCountByProjectName"
+          :hook-count-by-thread-id="hookCountByThreadId"
           @select-server="onSelectServer"
           @select="onSelectThread"
           @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
@@ -147,6 +161,9 @@
           </template>
           <template v-else-if="isSettingsRoute">
             <SettingsPanel @connectors-changed="onConnectorsChanged" />
+          </template>
+          <template v-else-if="isHooksRoute">
+            <HookInboxPanel :entries="hookInboxEntries" @open-thread="onOpenHookThread" />
           </template>
           <template v-else-if="isHomeRoute">
             <div class="content-grid">
@@ -227,6 +244,7 @@ import ServerPicker from './components/content/ServerPicker.vue'
 import SkillsHub from './components/content/SkillsHub.vue'
 import AdminPanel from './components/content/AdminPanel.vue'
 import SettingsPanel from './components/content/SettingsPanel.vue'
+import HookInboxPanel from './components/content/HookInboxPanel.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerX from './components/icons/IconTablerX.vue'
@@ -246,6 +264,11 @@ const {
   selectedThread,
   selectedThreadScrollState,
   selectedThreadServerRequests,
+  hookInboxEntries,
+  hookCountByProjectName,
+  hookCountByThreadId,
+  hasPendingHooks,
+  pendingHookCount,
   selectedLiveOverlay,
   selectedThreadId,
   availableModelIds,
@@ -313,6 +336,7 @@ const isHomeRoute = computed(() => route.name === 'home')
 const isSkillsRoute = computed(() => route.name === 'skills')
 const isAdminRoute = computed(() => route.name === 'admin')
 const isSettingsRoute = computed(() => route.name === 'settings')
+const isHooksRoute = computed(() => route.name === 'hooks')
 const isThreadRoute = computed(() => route.name === 'thread')
 type SessionUser = {
   id: string
@@ -345,6 +369,7 @@ const contentTitle = computed(() => {
   if (isSkillsRoute.value) return 'Skills'
   if (isAdminRoute.value) return 'Admin'
   if (isSettingsRoute.value) return 'Settings'
+  if (isHooksRoute.value) return 'Hooks'
   if (isHomeRoute.value) return 'New thread'
   return `${selectedServerLabel.value} / ${selectedProjectLabel.value}`
 })
@@ -461,6 +486,12 @@ function onSelectServer(serverId: string): void {
   void selectServer(serverId)
 }
 
+function onOpenHookThread(threadId: string): void {
+  if (!threadId) return
+  void router.push({ name: 'thread', params: { threadId } })
+  if (isMobile.value) setSidebarCollapsed(true)
+}
+
 function setSidebarCollapsed(nextValue: boolean): void {
   if (isSidebarCollapsed.value === nextValue) return
   isSidebarCollapsed.value = nextValue
@@ -532,7 +563,7 @@ async function syncThreadSelectionWithRoute(): Promise<void> {
   isRouteSyncInProgress.value = true
 
   try {
-    if (route.name === 'home' || route.name === 'skills' || route.name === 'settings') {
+    if (route.name === 'home' || route.name === 'skills' || route.name === 'settings' || route.name === 'hooks') {
       if (selectedThreadId.value !== '') {
         await selectThread('')
       }
@@ -591,7 +622,7 @@ watch(
   async (threadId) => {
     if (!hasInitialized.value) return
     if (isRouteSyncInProgress.value) return
-    if (isHomeRoute.value || isSkillsRoute.value || isAdminRoute.value || isSettingsRoute.value) return
+    if (isHomeRoute.value || isSkillsRoute.value || isAdminRoute.value || isSettingsRoute.value || isHooksRoute.value) return
 
     if (!threadId) {
       if (route.name !== 'home') {
@@ -735,6 +766,10 @@ async function onLogout(): Promise<void> {
 
 .sidebar-skills-link.is-active {
   @apply bg-zinc-200 text-zinc-900 font-medium;
+}
+
+.sidebar-alert-badge {
+  @apply ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-rose-600 px-1.5 py-0.5 text-[11px] font-semibold text-white;
 }
 
 .sidebar-thread-controls-header-host {

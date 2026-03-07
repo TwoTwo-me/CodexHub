@@ -4,7 +4,7 @@ import {
   getCodexServers,
   getAvailableModelIds,
   getCurrentModelConfig,
-  getPendingServerRequests,
+  getPendingServerRequestsForServer,
   getSkillsList,
   interruptThreadTurn,
   replyToServerRequest,
@@ -29,6 +29,7 @@ import type {
   CommandExecutionData,
   ReasoningEffort,
   ThreadScrollState,
+  UiHookInboxEntry,
   UiLiveOverlay,
   UiMessage,
   UiProjectGroup,
@@ -251,18 +252,62 @@ function mergeProjectOrder(previousOrder: string[], incomingGroups: UiProjectGro
   return areStringArraysEqual(previousOrder, nextOrder) ? previousOrder : nextOrder
 }
 
-function orderGroupsByProjectOrder(incoming: UiProjectGroup[], projectOrder: string[]): UiProjectGroup[] {
+
+function readIsoDateMs(value: string | undefined): number {
+  if (!value) return 0
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function orderGroupsByProjectOrder(
+  incoming: UiProjectGroup[],
+  projectOrder: string[],
+  latestPendingHookAtByProjectName: Record<string, number> = {},
+): UiProjectGroup[] {
   const incomingByName = new Map(incoming.map((group) => [group.projectName, group]))
-  const ordered: UiProjectGroup[] = projectOrder
+  const persistedOrder = projectOrder
     .map((projectName) => incomingByName.get(projectName) ?? { projectName, threads: [] })
 
   for (const group of incoming) {
     if (!projectOrder.includes(group.projectName)) {
-      ordered.push(group)
+      persistedOrder.push(group)
     }
   }
 
-  return ordered
+  const groupsWithHooks = persistedOrder
+    .filter((group) => (latestPendingHookAtByProjectName[group.projectName] ?? 0) > 0)
+    .sort((first, second) => {
+      const delta = (latestPendingHookAtByProjectName[second.projectName] ?? 0)
+        - (latestPendingHookAtByProjectName[first.projectName] ?? 0)
+      if (delta !== 0) return delta
+      return first.projectName.localeCompare(second.projectName)
+    })
+
+  if (groupsWithHooks.length === 0) {
+    return persistedOrder
+  }
+
+  const hookedNames = new Set(groupsWithHooks.map((group) => group.projectName))
+  const remainingGroups = persistedOrder.filter((group) => !hookedNames.has(group.projectName))
+  return [...groupsWithHooks, ...remainingGroups]
+}
+
+function flattenPendingServerRequests(
+  pendingByThreadId: Record<string, UiServerRequest[]>,
+): UiServerRequest[] {
+  const rows: UiServerRequest[] = []
+  for (const requests of Object.values(pendingByThreadId)) {
+    rows.push(...requests)
+  }
+  return rows
+}
+
+function sortServerRequestsNewestFirst(requests: UiServerRequest[]): UiServerRequest[] {
+  return [...requests].sort((first, second) => {
+    const timeDelta = readIsoDateMs(second.receivedAtIso) - readIsoDateMs(first.receivedAtIso)
+    if (timeDelta !== 0) return timeDelta
+    return second.id - first.id
+  })
 }
 
 function areStringArraysEqual(first?: string[], second?: string[]): boolean {
@@ -756,6 +801,64 @@ export function useDesktopState() {
   const selectedThreadScrollState = computed<ThreadScrollState | null>(
     () => scrollStateByThreadId.value[selectedThreadId.value] ?? null,
   )
+
+  const pendingHookCount = computed(() => flattenPendingServerRequests(pendingServerRequestsByThreadId.value).length)
+  const hasPendingHooks = computed(() => pendingHookCount.value > 0)
+  const hookCountByThreadId = computed<Record<string, number>>(() => {
+    const counts: Record<string, number> = {}
+    for (const [threadId, requests] of Object.entries(pendingServerRequestsByThreadId.value)) {
+      if (threadId === GLOBAL_SERVER_REQUEST_SCOPE || !Array.isArray(requests) || requests.length === 0) continue
+      counts[threadId] = requests.length
+    }
+    return counts
+  })
+  const hookCountByProjectName = computed<Record<string, number>>(() => {
+    const counts: Record<string, number> = {}
+    const projectNameByThreadId = new Map(flattenThreads(sourceGroups.value).map((thread) => [thread.id, thread.projectName]))
+    for (const [threadId, requests] of Object.entries(pendingServerRequestsByThreadId.value)) {
+      if (!Array.isArray(requests) || requests.length === 0 || threadId === GLOBAL_SERVER_REQUEST_SCOPE) continue
+      const projectName = projectNameByThreadId.get(threadId)
+      if (!projectName) continue
+      counts[projectName] = (counts[projectName] ?? 0) + requests.length
+    }
+    return counts
+  })
+  const latestPendingHookAtByProjectName = computed<Record<string, number>>(() => {
+    const next: Record<string, number> = {}
+    const projectNameByThreadId = new Map(flattenThreads(sourceGroups.value).map((thread) => [thread.id, thread.projectName]))
+    for (const [threadId, requests] of Object.entries(pendingServerRequestsByThreadId.value)) {
+      if (!Array.isArray(requests) || requests.length === 0 || threadId === GLOBAL_SERVER_REQUEST_SCOPE) continue
+      const projectName = projectNameByThreadId.get(threadId)
+      if (!projectName) continue
+      for (const request of requests) {
+        const receivedAtMs = readIsoDateMs(request.receivedAtIso)
+        if (receivedAtMs > (next[projectName] ?? 0)) {
+          next[projectName] = receivedAtMs
+        }
+      }
+    }
+    return next
+  })
+  const hookInboxEntries = computed<UiHookInboxEntry[]>(() => {
+    const threadById = new Map(flattenThreads(sourceGroups.value).map((thread) => [thread.id, thread]))
+    const rows = flattenPendingServerRequests(pendingServerRequestsByThreadId.value)
+      .filter((request) => request.threadId !== GLOBAL_SERVER_REQUEST_SCOPE)
+    return sortServerRequestsNewestFirst(rows).map((request) => {
+      const thread = threadById.get(request.threadId)
+      const projectName = thread?.projectName ?? 'unknown-project'
+      const projectLabel = projectDisplayNameById.value[projectName] ?? projectName
+      return {
+        requestId: request.id,
+        serverId: request.serverId,
+        threadId: request.threadId,
+        threadTitle: thread?.title ?? request.threadId,
+        projectName,
+        projectLabel,
+        method: request.method,
+        receivedAtIso: request.receivedAtIso,
+      }
+    })
+  })
   const selectedThreadServerRequests = computed<UiServerRequest[]>(() => {
     const rows: UiServerRequest[] = []
     const selected = selectedThreadId.value
@@ -765,7 +868,7 @@ export function useDesktopState() {
     if (Array.isArray(pendingServerRequestsByThreadId.value[GLOBAL_SERVER_REQUEST_SCOPE])) {
       rows.push(...pendingServerRequestsByThreadId.value[GLOBAL_SERVER_REQUEST_SCOPE])
     }
-    return rows.sort((first, second) => first.receivedAtIso.localeCompare(second.receivedAtIso))
+    return sortServerRequestsNewestFirst(rows)
   })
   const selectedLiveOverlay = computed<UiLiveOverlay | null>(() => {
     const threadId = selectedThreadId.value
@@ -935,6 +1038,7 @@ export function useDesktopState() {
     }))
   }
 
+
   function applyThreadFlags(): void {
     const withTitles = applyCachedTitlesToGroups(sourceGroups.value)
     const flaggedGroups: UiProjectGroup[] = withTitles.map((group) => ({
@@ -953,7 +1057,12 @@ export function useDesktopState() {
         }
       }),
     }))
-    projectGroups.value = mergeThreadGroups(projectGroups.value, flaggedGroups)
+    const orderedGroups = orderGroupsByProjectOrder(
+      flaggedGroups,
+      projectOrder.value,
+      latestPendingHookAtByProjectName.value,
+    )
+    projectGroups.value = mergeThreadGroups(projectGroups.value, orderedGroups)
   }
 
   function insertOptimisticThread(threadId: string, cwd: string, firstMessageText: string): void {
@@ -1271,7 +1380,8 @@ export function useDesktopState() {
     return readString(errorPayload?.message)
   }
 
-  function normalizeServerRequest(params: unknown): UiServerRequest | null {
+
+  function normalizeServerRequest(params: unknown, serverId = selectedServerId.value): UiServerRequest | null {
     const row = asRecord(params)
     if (!row) return null
 
@@ -1291,6 +1401,7 @@ export function useDesktopState() {
     return {
       id,
       method,
+      serverId,
       threadId,
       turnId,
       itemId,
@@ -1302,7 +1413,7 @@ export function useDesktopState() {
   function upsertPendingServerRequest(request: UiServerRequest): void {
     const threadId = request.threadId || GLOBAL_SERVER_REQUEST_SCOPE
     const current = pendingServerRequestsByThreadId.value[threadId] ?? []
-    const index = current.findIndex((row) => row.id === request.id)
+    const index = current.findIndex((row) => row.id === request.id && row.serverId === request.serverId)
     const nextRows = [...current]
     if (index >= 0) {
       nextRows.splice(index, 1, request)
@@ -1312,24 +1423,26 @@ export function useDesktopState() {
 
     pendingServerRequestsByThreadId.value = {
       ...pendingServerRequestsByThreadId.value,
-      [threadId]: nextRows.sort((first, second) => first.receivedAtIso.localeCompare(second.receivedAtIso)),
+      [threadId]: sortServerRequestsNewestFirst(nextRows),
     }
+    applyThreadFlags()
   }
 
-  function removePendingServerRequestById(requestId: number): void {
+  function removePendingServerRequestById(requestId: number, serverId = selectedServerId.value): void {
     const next: Record<string, UiServerRequest[]> = {}
     for (const [threadId, requests] of Object.entries(pendingServerRequestsByThreadId.value)) {
-      const filtered = requests.filter((request) => request.id !== requestId)
+      const filtered = requests.filter((request) => !(request.id === requestId && request.serverId === serverId))
       if (filtered.length > 0) {
         next[threadId] = filtered
       }
     }
     pendingServerRequestsByThreadId.value = next
+    applyThreadFlags()
   }
 
   function handleServerRequestNotification(notification: RpcNotification): boolean {
     if (notification.method === 'server/request') {
-      const request = normalizeServerRequest(notification.params)
+      const request = normalizeServerRequest(notification.params, notification.serverId.trim() || selectedServerId.value)
       if (!request) return true
       upsertPendingServerRequest(request)
       return true
@@ -1339,7 +1452,7 @@ export function useDesktopState() {
       const row = asRecord(notification.params)
       const id = row?.id
       if (typeof id === 'number' && Number.isInteger(id)) {
-        removePendingServerRequestById(id)
+        removePendingServerRequestById(id, notification.serverId.trim() || selectedServerId.value)
       }
       return true
     }
@@ -2578,10 +2691,10 @@ export function useDesktopState() {
 
   async function loadPendingServerRequestsFromBridge(): Promise<void> {
     try {
-      const rows = await getPendingServerRequests()
+      const rows = await getPendingServerRequestsForServer(selectedServerId.value)
       const nextByThreadId: Record<string, UiServerRequest[]> = {}
       for (const row of rows) {
-        const request = normalizeServerRequest(row)
+        const request = normalizeServerRequest(row, selectedServerId.value)
         if (request) {
           const threadId = request.threadId || GLOBAL_SERVER_REQUEST_SCOPE
           if (!nextByThreadId[threadId]) {
@@ -2592,10 +2705,11 @@ export function useDesktopState() {
       }
 
       for (const [threadId, requests] of Object.entries(nextByThreadId)) {
-        nextByThreadId[threadId] = requests.sort((first, second) => first.receivedAtIso.localeCompare(second.receivedAtIso))
+        nextByThreadId[threadId] = sortServerRequestsNewestFirst(requests)
       }
 
       pendingServerRequestsByThreadId.value = Object.keys(nextByThreadId).length > 0 ? nextByThreadId : {}
+      applyThreadFlags()
     } catch {
       // Keep UI usable when pending request endpoint is temporarily unavailable.
     }
@@ -2723,6 +2837,11 @@ export function useDesktopState() {
     selectedThread,
     selectedThreadScrollState,
     selectedThreadServerRequests,
+    hookInboxEntries,
+    hookCountByProjectName,
+    hookCountByThreadId,
+    hasPendingHooks,
+    pendingHookCount,
     selectedLiveOverlay,
     selectedThreadId,
     availableModelIds,

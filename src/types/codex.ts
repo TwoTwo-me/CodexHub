@@ -97,11 +97,23 @@ export type UiMessage = {
 export type UiServerRequest = {
   id: number
   method: string
+  serverId: string
   threadId: string
   turnId: string
   itemId: string
   receivedAtIso: string
   params: unknown
+}
+
+export type UiHookInboxEntry = {
+  requestId: number
+  serverId: string
+  threadId: string
+  threadTitle: string
+  projectName: string
+  projectLabel: string
+  method: string
+  receivedAtIso: string
 }
 
 export type UiServerRequestReply = {

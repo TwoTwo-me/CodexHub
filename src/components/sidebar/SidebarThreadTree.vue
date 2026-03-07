@@ -39,6 +39,7 @@
                   <IconTablerChevronDown v-else class="thread-icon" />
                 </span>
               </span>
+              <span v-if="hasPendingHooks && isServerSelected(server.id)" class="hook-alert-dot" data-scope="server" />
             </template>
             <span class="server-row-label">{{ server.label }}</span>
             <template #right>
@@ -67,6 +68,7 @@
                       <template #left>
                         <span class="thread-left-stack">
                           <span v-if="thread.inProgress || thread.unread" class="thread-status-indicator" :data-state="getThreadState(thread)" />
+                        <span v-if="hasThreadPendingHook(thread.id)" class="hook-alert-dot hook-alert-dot-inline" data-scope="thread" />
                           <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
                             <IconTablerPin class="thread-icon" />
                           </button>
@@ -157,6 +159,7 @@
                           class="thread-status-indicator"
                           :data-state="getThreadState(thread)"
                         />
+                        <span v-if="hasThreadPendingHook(thread.id)" class="hook-alert-dot hook-alert-dot-inline" data-scope="thread" />
                         <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
                           <IconTablerPin class="thread-icon" />
                         </button>
@@ -219,6 +222,7 @@
                             <IconTablerChevronDown v-else class="thread-icon" />
                           </span>
                         </span>
+                        <span v-if="hasProjectPendingHook(group.projectName)" class="hook-alert-dot" data-scope="project" />
                       </template>
                       <span
                         class="project-main-button"
@@ -292,6 +296,7 @@
                                 class="thread-status-indicator"
                                 :data-state="getThreadState(thread)"
                               />
+                              <span v-if="hasThreadPendingHook(thread.id)" class="hook-alert-dot hook-alert-dot-inline" data-scope="thread" />
                               <button class="thread-pin-button" type="button" title="pin" @click="togglePin(thread.id)">
                                 <IconTablerPin class="thread-icon" />
                               </button>
@@ -376,6 +381,9 @@ const props = defineProps<{
   selectedThreadId: string
   isLoading: boolean
   searchQuery: string
+  hasPendingHooks: boolean
+  hookCountByProjectName: Record<string, number>
+  hookCountByThreadId: Record<string, number>
 }>()
 
 const emit = defineEmits<{
@@ -847,6 +855,14 @@ function isExpanded(projectName: string): boolean {
 
 function isCollapsed(projectName: string): boolean {
   return collapsedProjects.value[toScopedProjectKey(props.selectedServerId, projectName)] === true
+}
+
+function hasProjectPendingHook(projectName: string): boolean {
+  return (props.hookCountByProjectName[projectName] ?? 0) > 0
+}
+
+function hasThreadPendingHook(threadId: string): boolean {
+  return (props.hookCountByThreadId[threadId] ?? 0) > 0
 }
 
 function toggleProjectExpansion(projectName: string): void {
@@ -1606,5 +1622,21 @@ onBeforeUnmount(() => {
 .thread-row:focus-within .thread-status-indicator[data-state='unread'],
 .thread-row:focus-within .thread-status-indicator[data-state='working'] {
   @apply opacity-0;
+}
+</style>
+
+
+<style scoped>
+.hook-alert-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #dc2626;
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 0.95);
+  flex: 0 0 auto;
+}
+
+.hook-alert-dot-inline {
+  margin-right: 2px;
 }
 </style>

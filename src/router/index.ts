@@ -33,6 +33,11 @@ const router = createRouter({
       component: EmptyRouteView,
     },
     {
+      path: '/hooks',
+      name: 'hooks',
+      component: EmptyRouteView,
+    },
+    {
       path: '/new-thread',
       redirect: { name: 'home' },
     },

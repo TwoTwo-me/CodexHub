@@ -277,6 +277,10 @@ export async function getPendingServerRequests(): Promise<unknown[]> {
   return fetchPendingServerRequests(scopedServerOptions())
 }
 
+export async function getPendingServerRequestsForServer(serverId: string): Promise<unknown[]> {
+  return fetchPendingServerRequests({ serverId: serverId.trim() })
+}
+
 export async function resumeThread(threadId: string): Promise<void> {
   await callRpc('thread/resume', { threadId })
 }
