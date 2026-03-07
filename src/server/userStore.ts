@@ -472,7 +472,7 @@ export async function upsertBootstrapAdmin(
     const state = await loadState()
     const nowIso = new Date().toISOString()
     const existing = findUserByUsername(state, normalizedUsername)
-    const passwordHash = 'passwordHash' in normalizedCredential
+    const passwordHash = ('passwordHash' in normalizedCredential && typeof normalizedCredential.passwordHash === 'string')
       ? normalizedCredential.passwordHash
       : await hashPassword(normalizedCredential.password)
 
