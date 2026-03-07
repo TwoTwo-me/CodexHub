@@ -18,6 +18,10 @@ if (fs.existsSync(envFile)) {
 }
 
 const args = [
+  'exec',
+  '--yes',
+  `--package=${env.CODEXUI_CONNECTOR_PACKAGE_SPEC || 'github:TwoTwo-me/codexUI#main'}`,
+  '--',
   'codexui-connector',
   'connect',
   '--hub', env.CODEXUI_CONNECTOR_HUB || 'https://hub.example.com',
@@ -42,7 +46,7 @@ module.exports = {
   apps: [
     {
       name: `codexui-connector-${env.CODEXUI_CONNECTOR_ID || 'edge-laptop'}`,
-      script: 'npx',
+      script: 'npm',
       args,
       cwd: process.env.HOME || '/root',
       interpreter: 'none',

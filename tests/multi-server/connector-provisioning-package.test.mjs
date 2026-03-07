@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -13,6 +13,15 @@ const repoDir = resolve(__dirname, '../..')
 async function loadConnectorModule() {
   const moduleUrl = pathToFileURL(resolve(repoDir, 'dist-cli/connector.js')).href
   return await import(`${moduleUrl}?t=${Date.now()}`)
+}
+
+async function listenOnRandomPort(server) {
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') {
+    throw new Error('Failed to bind test server')
+  }
+  return address.port
 }
 
 test('connector package provisions a connector via hub login and returns an install command', async () => {
@@ -96,12 +105,21 @@ test('connector package provisions a connector via hub login and returns an inst
       hubAddress: provisioned.connector.hubAddress,
       connectorId: provisioned.connector.id,
     })
+    const inlineInstallCommand = module.createConnectorInstallCommand({
+      hubAddress: provisioned.connector.hubAddress,
+      connectorId: provisioned.connector.id,
+      bootstrapToken: provisioned.bootstrapToken,
+    })
+    assert.match(installCommand, /npm exec --yes/)
+    assert.match(installCommand, /--package="github:TwoTwo-me\/codexUI#main"/)
     assert.match(installCommand, /codexui-connector install/)
     assert.match(installCommand, /edge-laptop/)
     assert.match(installCommand, /--token-file/)
     assert.match(installCommand, /\$HOME\/\.codexui-connector\/edge-laptop\.token/)
     assert.doesNotMatch(installCommand, /"~\//)
     assert.doesNotMatch(installCommand, /install-token-123/)
+    assert.match(inlineInstallCommand, /--token "install-token-123"/)
+    assert.match(inlineInstallCommand, /--token-file/)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => {
@@ -160,6 +178,99 @@ test('connector install command refuses bootstrap input that would discard the d
   assert.notEqual(result.status, 0)
   assert.match(`${result.stdout}\n${result.stderr}`, /--token-file/i)
   assert.match(`${result.stdout}\n${result.stderr}`, /--run/i)
+})
+
+test('connector install CLI accepts inline bootstrap token when a token file is provided for credential persistence', async () => {
+  const connectorEntrypoint = resolve(repoDir, 'dist-cli/connector.js')
+  const tempDir = await mkdtemp(resolve(tmpdir(), 'codexui-inline-install-'))
+  const tokenFilePath = resolve(tempDir, 'edge-laptop.token')
+  let port = 0
+
+  const server = createServer(async (req, res) => {
+    if (req.method === 'POST' && req.url === '/codex-api/connectors/edge-laptop/bootstrap-exchange') {
+      assert.equal(req.headers.authorization, 'Bearer inline-bootstrap-token')
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      res.end(JSON.stringify({
+        data: {
+          connector: {
+            id: 'edge-laptop',
+            serverId: 'edge-laptop',
+            name: 'Edge Laptop',
+            hubAddress: `http://127.0.0.1:${String(port)}`,
+            relayAgentId: 'agent-edge-laptop',
+            installState: 'offline',
+            credentialIssuedAtIso: '2026-03-07T00:02:00.000Z',
+          },
+          credentialToken: 'durable-token-inline-456',
+        },
+      }))
+      return
+    }
+
+    res.statusCode = 404
+    res.end(JSON.stringify({ error: 'Not found' }))
+  })
+
+  port = await listenOnRandomPort(server)
+
+  try {
+    const result = await new Promise((resolvePromise, reject) => {
+      const child = spawn(
+        'node',
+        [
+          connectorEntrypoint,
+          'install',
+          '--hub',
+          `http://127.0.0.1:${String(port)}`,
+          '--connector',
+          'edge-laptop',
+          '--token',
+          'inline-bootstrap-token',
+          '--token-file',
+          tokenFilePath,
+          '--allow-insecure-http',
+        ],
+        {
+          cwd: repoDir,
+          env: {
+            ...process.env,
+            NO_COLOR: '1',
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      )
+
+      let stdout = ''
+      let stderr = ''
+      child.stdout.setEncoding('utf8')
+      child.stderr.setEncoding('utf8')
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk
+      })
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk
+      })
+      child.once('error', reject)
+      child.once('close', (status) => {
+        resolvePromise({ status, stdout, stderr })
+      })
+    })
+
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+    assert.match(`${result.stdout}\n${result.stderr}`, /Credential file updated:/)
+    assert.equal(await readFile(tokenFilePath, 'utf8'), 'durable-token-inline-456')
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve()
+      })
+    })
+  }
 })
 
 test('connector package exchanges a bootstrap token and rewrites the token file with the durable credential', async () => {

@@ -219,7 +219,10 @@
 
       <label class="settings-field">
         <span class="settings-field-label">Suggested install command</span>
-        <textarea class="settings-code-block settings-code-block-large" readonly :value="selectedInstallArtifact.command"></textarea>
+        <textarea class="settings-code-block settings-code-block-large" readonly :value="selectedInstallCommand"></textarea>
+        <p class="settings-field-help">
+          Reveal token to embed it directly in the command below. Inline tokens are convenient, but they may be saved in shell history.
+        </p>
       </label>
     </section>
   </section>
@@ -235,15 +238,15 @@ import {
   rotateConnectorRegistrationToken,
   type CodexConnectorInfo,
 } from '../../api/codexGateway'
+import { createConnectorInstallCommand } from '../../shared/connectorInstallCommand'
 
 const emit = defineEmits<{
   'connectors-changed': []
 }>()
 
 type InstallArtifact = {
-  connectorId: string
+  connector: CodexConnectorInfo
   token: string
-  command: string
 }
 
 const connectors = ref<CodexConnectorInfo[]>([])
@@ -273,10 +276,21 @@ const selectedConnector = computed<CodexConnectorInfo | null>(() => {
 const selectedInstallArtifact = computed<InstallArtifact | null>(() => {
   const artifact = latestInstallArtifact.value
   const connector = selectedConnector.value
-  if (!artifact || !connector || artifact.connectorId !== connector.id) {
+  if (!artifact || !connector || artifact.connector.id !== connector.id) {
     return null
   }
   return artifact
+})
+
+const selectedInstallCommand = computed(() => {
+  const artifact = selectedInstallArtifact.value
+  if (!artifact) return ''
+  return createConnectorInstallCommand({
+    hubAddress: artifact.connector.hubAddress,
+    connectorId: artifact.connector.id,
+    bootstrapToken: isTokenRevealed.value ? artifact.token : '',
+    ...(artifact.connector.relayE2eeKeyId ? { relayE2eeKeyId: artifact.connector.relayE2eeKeyId } : {}),
+  })
 })
 
 function normalizeSelection(nextRows: CodexConnectorInfo[]): void {
@@ -323,27 +337,10 @@ function formatInstallStateLabel(state: CodexConnectorInfo['installState']): str
   }
 }
 
-function buildInstallCommand(connector: CodexConnectorInfo): string {
-  const encodedHub = JSON.stringify(connector.hubAddress)
-  const encodedConnectorId = JSON.stringify(connector.id)
-  const encodedTokenFile = JSON.stringify(`$HOME/.codexui-connector/${connector.id}.token`)
-  const parts = [
-    'npx codexui-connector install',
-    `--hub ${encodedHub}`,
-    `--connector ${encodedConnectorId}`,
-    `--token-file ${encodedTokenFile}`,
-  ]
-  if (connector.hubAddress.startsWith('http://')) {
-    parts.push('--allow-insecure-http')
-  }
-  return parts.join(' ')
-}
-
 function setLatestInstallArtifact(connector: CodexConnectorInfo, token: string): void {
   latestInstallArtifact.value = {
-    connectorId: connector.id,
+    connector,
     token,
-    command: buildInstallCommand(connector),
   }
   isTokenRevealed.value = false
 }
@@ -483,7 +480,7 @@ async function confirmDelete(): Promise<void> {
   try {
     await deleteConnectorRegistration(connector.id)
     await refreshConnectors()
-    latestInstallArtifact.value = latestInstallArtifact.value?.connectorId === connector.id ? null : latestInstallArtifact.value
+    latestInstallArtifact.value = latestInstallArtifact.value?.connector.id === connector.id ? null : latestInstallArtifact.value
     if (latestInstallArtifact.value === null) {
       isTokenRevealed.value = false
     }

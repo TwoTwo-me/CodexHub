@@ -26,8 +26,8 @@ codex login
 4. Open **Settings**
 5. Create a Connector
 6. Reveal the one-time bootstrap token
-7. Save it to a secure token file on the remote host
-8. Run `codexui-connector install`
+7. Copy the generated install command (it embeds the one-time bootstrap token inline)
+8. Run the generated `codexui-connector install` command
 9. Start `codexui-connector connect`
 
 ### B. Terminal-only path
@@ -36,7 +36,7 @@ You can also register from a terminal using Hub credentials:
 
 ```bash
 read -sr CODEXUI_HUB_PASSWORD && printf '%s' "$CODEXUI_HUB_PASSWORD" | \
-  npx codexui-connector provision \
+  npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector provision \
   --hub https://hub.example.com \
   --username alice \
   --password-stdin \
@@ -51,20 +51,13 @@ This returns:
 
 ## Install flow
 
-### 1. Save the bootstrap token securely
+### 1. Exchange the bootstrap token for the durable credential
 
 ```bash
-install -d -m 700 $HOME/.codexui-connector
-printf '%s' '<bootstrap-token>' > $HOME/.codexui-connector/edge-laptop.token
-chmod 600 $HOME/.codexui-connector/edge-laptop.token
-```
-
-### 2. Exchange it for the durable credential
-
-```bash
-npx codexui-connector install \
+npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector install \
   --hub https://hub.example.com \
   --connector edge-laptop \
+  --token '<bootstrap-token>' \
   --token-file $HOME/.codexui-connector/edge-laptop.token
 ```
 
@@ -74,10 +67,10 @@ During `install` the Connector:
 3. receives the durable runtime credential
 4. rewrites the same `--token-file` with the durable credential
 
-### 3. Start the Connector runtime
+### 2. Start the Connector runtime
 
 ```bash
-npx codexui-connector connect \
+npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector connect \
   --hub https://hub.example.com \
   --connector edge-laptop \
   --token-file $HOME/.codexui-connector/edge-laptop.token
@@ -107,7 +100,7 @@ At runtime the Connector:
 
 ## Process model
 
-`codexui-connector connect` is a **foreground long-running process**.
+`npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector connect ...` is a **foreground long-running process**.
 
 That means:
 - it stays online while the process is running
@@ -140,7 +133,8 @@ The Connector normally runs on a separate remote machine, but it can also run in
 - The durable runtime credential is distinct from the bootstrap token.
 - Public Hubs should use **HTTPS**.
 - Reissue install tokens from Settings whenever reinstalling or revoking a host.
-- Suggested commands use `--token-file` so secrets do not have to appear in shell history.
+- The Settings UI now offers a copy-paste command that embeds the one-time bootstrap token inline for convenience and still writes the durable credential to `--token-file`.
+- If you want to avoid shell history exposure entirely, write the bootstrap token into a file first and then run the same `install` command with `--token-file` only.
 
 ## Verification
 

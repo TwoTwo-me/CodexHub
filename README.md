@@ -162,20 +162,19 @@ Persisted directories:
 ### Remote host example
 
 ```bash
-install -d -m 700 $HOME/.codexui-connector
-printf '%s' '<bootstrap-token>' > $HOME/.codexui-connector/edge-laptop.token
-chmod 600 $HOME/.codexui-connector/edge-laptop.token
-
-npx codexui-connector install \
+npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector install \
   --hub https://hub.example.com \
   --connector edge-laptop \
+  --token '<bootstrap-token>' \
   --token-file $HOME/.codexui-connector/edge-laptop.token
 
-npx codexui-connector connect \
+npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector connect \
   --hub https://hub.example.com \
   --connector edge-laptop \
   --token-file $HOME/.codexui-connector/edge-laptop.token
 ```
+
+The install command now embeds the one-time bootstrap token inline and writes the durable runtime credential to `--token-file`.
 
 ## Optional: Hub-local Codex runtime
 

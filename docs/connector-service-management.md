@@ -5,7 +5,7 @@
 즉, 아래 명령은 실행 중인 동안에는 Connector를 온라인 상태로 유지하지만:
 
 ```bash
-npx codexui-connector connect \
+npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector connect \
   --hub https://hub.example.com \
   --connector edge-laptop \
   --token-file $HOME/.codexui-connector/edge-laptop.token
@@ -29,13 +29,10 @@ npx codexui-connector connect \
 먼저 bootstrap token으로 설치를 끝내서 durable token 파일이 있어야 합니다.
 
 ```bash
-install -d -m 700 $HOME/.codexui-connector
-printf '%s' '<bootstrap-token>' > $HOME/.codexui-connector/edge-laptop.token
-chmod 600 $HOME/.codexui-connector/edge-laptop.token
-
-npx codexui-connector install \
+npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector install \
   --hub https://hub.example.com \
   --connector edge-laptop \
+  --token '<bootstrap-token>' \
   --token-file $HOME/.codexui-connector/edge-laptop.token
 ```
 

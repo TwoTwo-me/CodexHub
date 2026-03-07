@@ -11,6 +11,7 @@ Environment=HOME=/root
 EnvironmentFile=/etc/codexui/edge-laptop.env
 ExecStart=/usr/bin/env bash -lc '
   set -euo pipefail
+  PACKAGE_SPEC="${CODEXUI_CONNECTOR_PACKAGE_SPEC:-github:TwoTwo-me/codexUI#main}"
   ARGS=(
     connect
     --hub "$CODEXUI_CONNECTOR_HUB"
@@ -31,7 +32,7 @@ ExecStart=/usr/bin/env bash -lc '
     ARGS+=(--passphrase "$CODEXUI_CONNECTOR_PASSPHRASE")
   fi
 
-  exec npx codexui-connector "${ARGS[@]}"
+  exec npm exec --yes --package="$PACKAGE_SPEC" -- codexui-connector "${ARGS[@]}"
 '
 Restart=always
 RestartSec=3

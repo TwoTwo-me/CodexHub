@@ -70,8 +70,8 @@ Deleting the Connector removes the matching relay-backed Server from the same us
 5. Create a Connector using that Hub origin
 6. Reveal the bootstrap token once
 7. Save it securely on the remote host
-8. Run the suggested `codexui-connector install --token-file ...` command
-9. Start the runtime with `codexui-connector connect --token-file ...`
+8. Run the suggested `npm exec --package=github:TwoTwo-me/codexUI#main -- codexui-connector install --token ... --token-file ...` command
+9. Start the runtime with `npm exec --package=github:TwoTwo-me/codexUI#main -- codexui-connector connect --token-file ...`
 10. Return to Settings and confirm:
     - install state
     - transport online/offline state

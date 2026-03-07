@@ -5,6 +5,10 @@ import { dirname, join } from 'node:path'
 import { Command } from 'commander'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import {
+  createConnectorConnectCommand,
+  createConnectorInstallCommand,
+} from '../shared/connectorInstallCommand.js'
 import { LocalCodexAppServer } from './localCodexAppServer.js'
 import {
   CodexRelayConnector,
@@ -100,23 +104,6 @@ function buildAuthorizationHeader(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
   }
-}
-
-export function createConnectorInstallCommand(
-  input: { hubAddress: string; connectorId: string; relayE2eeKeyId?: string; tokenFilePath?: string },
-): string {
-  const tokenFilePath = input.tokenFilePath?.trim() || `$HOME/.codexui-connector/${input.connectorId}.token`
-  const parts = [
-    'npx codexui-connector install',
-    `--hub ${JSON.stringify(input.hubAddress)}`,
-    `--connector ${JSON.stringify(input.connectorId)}`,
-    `--token-file ${JSON.stringify(tokenFilePath)}`,
-  ]
-  if (input.relayE2eeKeyId) {
-    parts.push(`--key-id ${JSON.stringify(input.relayE2eeKeyId)}`)
-    parts.push('--passphrase "<relay-passphrase>"')
-  }
-  return parts.join(' ')
 }
 
 export class HttpRelayHubTransport implements RelayConnectorTransport {
@@ -555,11 +542,53 @@ async function resolveInstallToken(options: {
   tokenFile?: string
   tokenStdin?: boolean
 }): Promise<string> {
-  const token = await resolveConnectToken(options)
-  if (!token) {
-    throw new Error('No bootstrap token was provided.')
+  const inlineToken = options.token?.trim()
+  const hasInlineToken = typeof inlineToken === 'string' && inlineToken.length > 0
+  const hasTokenStdin = options.tokenStdin === true
+  const tokenFilePath = options.tokenFile?.trim()
+  const hasTokenFile = typeof tokenFilePath === 'string' && tokenFilePath.length > 0
+
+  const inlineSourceCount = (hasInlineToken ? 1 : 0) + (hasTokenStdin ? 1 : 0)
+  if (inlineSourceCount > 1) {
+    throw new Error('Provide exactly one bootstrap token input source: --token, --token-file, or --token-stdin.')
   }
-  return token
+
+  if (hasInlineToken) {
+    return inlineToken
+  }
+
+  if (hasTokenStdin) {
+    const token = await readSecretFromStdin()
+    if (!token) {
+      throw new Error('No bootstrap token was provided on stdin.')
+    }
+    return token
+  }
+
+  if (hasTokenFile) {
+    const token = await readSecretFile(tokenFilePath)
+    if (!token) {
+      throw new Error('The relay token file is empty.')
+    }
+    return token
+  }
+
+  throw new Error('No bootstrap token was provided.')
+}
+
+function validateInstallTokenSource(options: {
+  token?: string
+  tokenFile?: string
+  tokenStdin?: boolean
+}): void {
+  const hasInlineToken = typeof options.token === 'string' && options.token.trim().length > 0
+  const hasTokenStdin = options.tokenStdin === true
+  const hasTokenFile = typeof options.tokenFile === 'string' && options.tokenFile.trim().length > 0
+
+  const sourceCount = (hasInlineToken ? 1 : 0) + (hasTokenStdin ? 1 : 0) + ((hasTokenFile && !hasInlineToken && !hasTokenStdin) ? 1 : 0)
+  if (sourceCount !== 1) {
+    throw new Error('Provide exactly one bootstrap token input source: --token, --token-file, or --token-stdin.')
+  }
 }
 
 function validateInstallPersistence(options: {
@@ -654,7 +683,7 @@ async function runCli(argv: string[]): Promise<void> {
     .requiredOption('--hub <url>', 'CodexUI hub base URL')
     .requiredOption('--connector <id>', 'Connector identifier')
     .option('--token <token>', 'Bootstrap token (least secure)')
-    .option('--token-file <path>', 'Read and rewrite the bootstrap token file in place')
+    .option('--token-file <path>', 'Read the bootstrap token from this file, or rewrite the durable credential to this file when used with --token/--token-stdin')
     .option('--token-stdin', 'Read the bootstrap token from stdin')
     .option('--key-id <keyId>', 'Relay E2EE key id')
     .option('--passphrase <passphrase>', 'Relay E2EE passphrase')
@@ -673,6 +702,7 @@ async function runCli(argv: string[]): Promise<void> {
       allowInsecureHttp?: boolean
       verbose?: boolean
     }) => {
+      validateInstallTokenSource(options)
       validateInstallPersistence(options)
       const installed = await installConnectorFromBootstrap({
         hubAddress: options.hub,
@@ -687,12 +717,12 @@ async function runCli(argv: string[]): Promise<void> {
       console.log(`Connector: ${installed.connector.name} (${installed.connector.id})`)
       if (installed.tokenFilePath) {
         console.log(`Credential file updated: ${installed.tokenFilePath}`)
-        const connectCommand = [
-          'npx codexui-connector connect',
-          `--hub ${JSON.stringify(options.hub)}`,
-          `--connector ${JSON.stringify(options.connector)}`,
-          `--token-file ${JSON.stringify(options.tokenFile?.trim() || `$HOME/.codexui-connector/${options.connector}.token`)}`,
-        ].join(' ')
+        const connectCommand = createConnectorConnectCommand({
+          hubAddress: options.hub,
+          connectorId: options.connector,
+          tokenFilePath: options.tokenFile?.trim() || `$HOME/.codexui-connector/${options.connector}.token`,
+          allowInsecureHttp: options.allowInsecureHttp === true,
+        })
         console.log('\nStart or restart the connector with:')
         console.log(connectCommand)
       } else {
@@ -757,6 +787,8 @@ async function runCli(argv: string[]): Promise<void> {
       const installCommand = createConnectorInstallCommand({
         hubAddress: provisioned.connector.hubAddress,
         connectorId: provisioned.connector.id,
+        bootstrapToken: provisioned.bootstrapToken,
+        allowInsecureHttp: options.allowInsecureHttp === true,
         ...(provisioned.connector.relayE2eeKeyId ? { relayE2eeKeyId: provisioned.connector.relayE2eeKeyId } : {}),
       })
 
@@ -770,9 +802,10 @@ async function runCli(argv: string[]): Promise<void> {
         console.log('Connector registered successfully.\n')
         console.log(`Connector: ${provisioned.connector.name} (${provisioned.connector.id})`)
         console.log(`Hub:       ${provisioned.connector.hubAddress}`)
-        console.log('\nSave the one-time bootstrap token to a secure file on the connector host, then run:')
+        console.log('\nRun the one-time install command below on the connector host:')
         console.log(installCommand)
-        console.log('\nUse --json if you need to capture the token programmatically, or --run to connect immediately on this host.')
+        console.log('\nThis command embeds the bootstrap token inline and writes the durable credential to --token-file.')
+        console.log('Use --json if you need to capture the token separately, or --run to connect immediately on this host.')
       }
 
       if (options.run) {
@@ -810,6 +843,11 @@ function isMainModule(): boolean {
 
 export { CodexRelayConnector } from './core.js'
 export { LocalCodexAppServer } from './localCodexAppServer.js'
+export {
+  createConnectorConnectCommand,
+  createConnectorInstallCommand,
+  CONNECTOR_NPM_PACKAGE_SPEC,
+} from '../shared/connectorInstallCommand.js'
 
 if (isMainModule()) {
   runCli(process.argv).catch((error) => {
