@@ -7,7 +7,8 @@ COPY package*.json ./
 RUN npm ci --ignore-scripts
 
 COPY . .
-RUN npm run build \
+RUN npm rebuild better-sqlite3 \
+  && npm run build \
   && npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runtime
