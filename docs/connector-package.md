@@ -105,6 +105,24 @@ At runtime the Connector:
 4. forwards them to the local `codex app-server`
 5. pushes responses/events back to the Hub
 
+## Process model
+
+`codexui-connector connect` is a **foreground long-running process**.
+
+That means:
+- it stays online while the process is running
+- it reconnects automatically when the network drops temporarily
+- it does **not** daemonize itself
+- if the shell/SSH session/server goes away, the Connector stops too
+
+For real operations, run it under **systemd** or **PM2**.
+
+See:
+- [`docs/connector-service-management.md`](./connector-service-management.md)
+- `docs/examples/codexui-connector.service.example`
+- `docs/examples/codexui-connector.pm2.config.cjs`
+- `docs/examples/codexui-connector.env.example`
+
 ## Docker note
 
 The root `docker-compose.yml` in this repo is for the **Hub**.

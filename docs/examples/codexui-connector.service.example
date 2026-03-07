@@ -1,0 +1,40 @@
+[Unit]
+Description=CodexUI Connector (edge-laptop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+Environment=HOME=/root
+EnvironmentFile=/etc/codexui/edge-laptop.env
+ExecStart=/usr/bin/env bash -lc '
+  set -euo pipefail
+  ARGS=(
+    connect
+    --hub "$CODEXUI_CONNECTOR_HUB"
+    --connector "$CODEXUI_CONNECTOR_ID"
+    --token-file "$CODEXUI_CONNECTOR_TOKEN_FILE"
+  )
+
+  if [[ "${CODEXUI_CONNECTOR_ALLOW_INSECURE_HTTP:-0}" == "1" ]]; then
+    ARGS+=(--allow-insecure-http)
+  fi
+  if [[ "${CODEXUI_CONNECTOR_VERBOSE:-0}" == "1" ]]; then
+    ARGS+=(--verbose)
+  fi
+  if [[ -n "${CODEXUI_CONNECTOR_KEY_ID:-}" ]]; then
+    ARGS+=(--key-id "$CODEXUI_CONNECTOR_KEY_ID")
+  fi
+  if [[ -n "${CODEXUI_CONNECTOR_PASSPHRASE:-}" ]]; then
+    ARGS+=(--passphrase "$CODEXUI_CONNECTOR_PASSPHRASE")
+  fi
+
+  exec npx codexui-connector "${ARGS[@]}"
+'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

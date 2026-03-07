@@ -168,6 +168,7 @@ Useful environment variables:
 - [`docs/hub-docker-deployment.md`](docs/hub-docker-deployment.md) — primary deployment guide
 - [`docs/settings-and-connectors.md`](docs/settings-and-connectors.md) — Settings UI and Connector lifecycle
 - [`docs/connector-package.md`](docs/connector-package.md) — remote Connector install/runtime guide
+- [`docs/connector-service-management.md`](docs/connector-service-management.md) — systemd / PM2 운영 가이드
 - [`docs/implementation-report.md`](docs/implementation-report.md) — phase-by-phase implementation summary
 - [`docs/connector-bootstrap-hardening-report.md`](docs/connector-bootstrap-hardening-report.md) — bootstrap hardening details
 - [`docs/multi-server-test-workflow.md`](docs/multi-server-test-workflow.md) — disposable multi-server Docker lab stack
