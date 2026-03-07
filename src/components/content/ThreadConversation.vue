@@ -364,6 +364,7 @@ type MessageBlock =
 let scrollRestoreFrame = 0
 let bottomLockFrame = 0
 let bottomLockFramesLeft = 0
+let forceBottomOnNextRestore = false
 const trackedPendingImages = new WeakSet<HTMLImageElement>()
 const failedMarkdownImageKeys = ref<Set<string>>(new Set())
 
@@ -738,6 +739,12 @@ function applySavedScrollState(): void {
   const container = conversationListRef.value
   if (!container) return
 
+  if (forceBottomOnNextRestore) {
+    forceBottomOnNextRestore = false
+    enforceBottomState()
+    return
+  }
+
   const savedState = props.scrollState
   if (!savedState || savedState.isAtBottom) {
     enforceBottomState()
@@ -821,6 +828,16 @@ async function scheduleScrollRestore(): Promise<void> {
     scheduleBottomLock()
   })
 }
+
+
+watch(
+  () => props.activeThreadId,
+  async (nextThreadId, previousThreadId) => {
+    if (!nextThreadId || nextThreadId === previousThreadId) return
+    forceBottomOnNextRestore = true
+    await scheduleScrollRestore()
+  },
+)
 
 watch(
   () => props.messages,
