@@ -51,7 +51,8 @@
     "docker:multi-server:prepare-auth": "bash scripts/docker/prepare-codex-auth.sh",
     "docker:multi-server:up": "bash scripts/docker/multi-server-up.sh",
     "docker:multi-server:smoke": "bash scripts/docker/multi-server-smoke.sh",
-    "docker:multi-server:down": "bash scripts/docker/multi-server-down.sh"
+    "docker:multi-server:down": "bash scripts/docker/multi-server-down.sh",
+    "prepare": "npm run build:cli"
   },
   "dependencies": {
     "commander": "^13.1.0",
