@@ -11,9 +11,14 @@ This fork is operated as a central **Hub** service with per-user servers, Connec
 - **Hub-first deployment** for a VM, cloud server, or homelab host
 - **Explicit server registration** only — nothing appears automatically
 - **Multi-user auth** with admin bootstrap + user/session management
+- **Public signup + admin approval** before non-admin accounts can sign in
 - **Settings UI** for Connector creation, rename, reinstall, delete, and status
+- **SQLite-backed Hub persistence** for users and Hub state
+- **Approval-gated signup flow** with admin review and per-user isolation
+- **Hook inbox + alert badges** for pending app-server hooks
 - **Outbound-only Connector model** for remote Codex hosts
 - **Bootstrap hardening**: one-time install token -> durable runtime credential
+- **SQLite-backed Hub persistence** for users and Hub state (`$CODEX_HOME/codexui/hub.sqlite`)
 - **Docker packaging** for the Hub with `.env`, `Dockerfile`, and `docker-compose.yml`
 
 ## Architecture
@@ -148,6 +153,11 @@ Persisted directories:
 - `CODEXUI_CODEX_HOME_DIR` -> optional local Codex auth/config for Hub-local runtimes
 - `CODEXUI_SKIP_CODEX_LOGIN=true` -> lets the Hub start in remote-only mode without forcing local Codex login
 
+Persisted files inside `CODEX_HOME`:
+
+- `codexui/hub.sqlite` -> SQLite database for users + Hub/global state
+- legacy `codexui/users.json` / `.codex-global-state.json` are imported on first run and then superseded by SQLite
+
 ## Connector onboarding
 
 1. Sign in to the Hub
@@ -218,7 +228,9 @@ Useful environment variables:
 - [`docs/settings-and-connectors.md`](docs/settings-and-connectors.md) — Settings UI and Connector lifecycle
 - [`docs/connector-package.md`](docs/connector-package.md) — remote Connector install/runtime guide
 - [`docs/connector-service-management.md`](docs/connector-service-management.md) — systemd / PM2 운영 가이드
+- [`docs/explorer-hooks-sqlite-approval-report.md`](docs/explorer-hooks-sqlite-approval-report.md) — server-scoped explorer, hook inbox, SQLite auth, and approval flow report
 - [`docs/implementation-report.md`](docs/implementation-report.md) — phase-by-phase implementation summary
+- [`docs/explorer-hooks-sqlite-approval-report.md`](docs/explorer-hooks-sqlite-approval-report.md) — explorer/hook/sqlite/approval rollout evidence
 - [`docs/connector-bootstrap-hardening-report.md`](docs/connector-bootstrap-hardening-report.md) — bootstrap hardening details
 - [`docs/multi-server-test-workflow.md`](docs/multi-server-test-workflow.md) — disposable multi-server Docker lab stack
 

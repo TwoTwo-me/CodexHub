@@ -187,3 +187,21 @@
 ## Current status
 - Phase 1–5 implementation track is complete at transport, onboarding, and settings-management level.
 - Hub users now have an explicit registration workflow for both local/relay servers and packaged outbound connectors.
+- Follow-up explorer/auth rollout status is documented in [`docs/explorer-hooks-sqlite-approval-report.md`](./explorer-hooks-sqlite-approval-report.md):
+  - server-scoped explorer state
+  - hook badges + inbox
+  - thread open scroll-to-bottom
+  - SQLite-backed Hub persistence
+  - public signup + admin approval flow
+
+
+## Explorer / Hooks / SQLite / Approval extension
+
+The later Hub UX + persistence rollout added:
+- server-scoped explorer trees
+- hook badges and the hook inbox panel
+- latest-message thread opening behavior
+- SQLite-backed Hub persistence
+- public signup with admin approval
+
+See [`docs/explorer-hooks-sqlite-approval-report.md`](./explorer-hooks-sqlite-approval-report.md) for the focused rollout summary, verification commands, and screenshot inventory.
