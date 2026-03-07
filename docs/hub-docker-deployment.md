@@ -36,7 +36,11 @@ CODEXUI_HOST_PORT=4300
 CODEXUI_PORT=4300
 CODEXUI_BIND_HOST=0.0.0.0
 CODEXUI_ADMIN_USERNAME=admin
+CODEXUI_ADMIN_PASSWORD_HASH=
+CODEXUI_ADMIN_PASSWORD_HASH_FILE=
+CODEXUI_ADMIN_LOGIN_PASSWORD=
 CODEXUI_ADMIN_PASSWORD=change-me-now
+CODEXUI_ADMIN_PASSWORD_FILE=
 CODEXUI_DATA_DIR=./.data/hub
 CODEXUI_WORKSPACE_DIR=./workspace
 CODEXUI_CODEX_HOME_DIR=./docker/local-codex
@@ -50,7 +54,7 @@ CODEXUI_CODEX_CLI_VERSION=0.110.0
 
 At minimum:
 
-- `CODEXUI_ADMIN_PASSWORD`
+- `CODEXUI_ADMIN_PASSWORD_HASH` (recommended) or `CODEXUI_ADMIN_PASSWORD`
 - `CODEXUI_PUBLIC_URL`
 
 Commonly adjusted:
@@ -61,6 +65,53 @@ Commonly adjusted:
 - `CODEXUI_DATA_DIR`
 - `CODEXUI_WORKSPACE_DIR`
 - `CODEXUI_CODEX_HOME_DIR`
+
+## Recommended bootstrap admin workflow
+
+Use a hash in `.env`, not the plaintext password.
+
+Generate it interactively:
+
+```bash
+npm run admin:hash-password
+```
+
+The helper prints:
+
+```dotenv
+CODEXUI_ADMIN_PASSWORD_HASH=scrypt$...
+```
+
+Paste that into `.env`, then remove or blank `CODEXUI_ADMIN_PASSWORD`.
+
+### Credential precedence
+
+The Hub entrypoint resolves bootstrap credentials in this order:
+
+1. `CODEXUI_ADMIN_PASSWORD_HASH_FILE`
+2. `CODEXUI_ADMIN_PASSWORD_HASH`
+3. `CODEXUI_ADMIN_PASSWORD_FILE`
+4. `CODEXUI_ADMIN_PASSWORD`
+
+If hash-based and plaintext-based values are mixed, the container exits with an error instead of guessing.
+
+### Runtime-only plaintext for helper scripts
+
+When the Hub is configured from `CODEXUI_ADMIN_PASSWORD_HASH`, the smoke test and the Hub-local registration helper still need the real password to log in once.
+
+Provide it **only at runtime**:
+
+```bash
+export CODEXUI_ADMIN_LOGIN_PASSWORD='your-bootstrap-password'
+npm run docker:hub:smoke
+```
+
+or:
+
+```bash
+export CODEXUI_ADMIN_LOGIN_PASSWORD='your-bootstrap-password'
+npm run docker:hub:register-local -- --default local-hub "Hub Local"
+```
 
 ## Start / stop / inspect
 

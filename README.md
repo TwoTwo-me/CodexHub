@@ -41,13 +41,43 @@ CodexUI Hub
 
 ## Quick start (recommended)
 
-### 1. Edit `.env`
+### 1. Generate a bootstrap admin password hash
 
-At minimum, change:
+Recommended: keep a **hash** in `.env`, not the plaintext password.
+
+Interactive helper:
+
+```bash
+npm run admin:hash-password
+```
+
+or directly:
+
+```bash
+read -sr -p "Bootstrap admin password: " PW; printf '\n'
+printf '%s' "$PW" | node dist-cli/index.js hash-password --password-stdin --env
+unset PW
+```
+
+That prints:
 
 ```dotenv
-CODEXUI_ADMIN_PASSWORD=change-me-now
+CODEXUI_ADMIN_PASSWORD_HASH=scrypt$...
+```
+
+### 2. Edit `.env`
+
+At minimum, set:
+
+```dotenv
+CODEXUI_ADMIN_PASSWORD_HASH=scrypt$...
 CODEXUI_PUBLIC_URL=http://localhost:4300
+```
+
+If you use the smoke test or the `docker:hub:register-local` helper while the Hub is configured from a hash, provide the plaintext **at runtime only**:
+
+```bash
+export CODEXUI_ADMIN_LOGIN_PASSWORD='your-bootstrap-password'
 ```
 
 Useful variables:
@@ -61,7 +91,7 @@ CODEXUI_SKIP_CODEX_LOGIN=true
 CODEXUI_CODEX_CLI_VERSION=0.110.0
 ```
 
-### 2. Start the Hub
+### 3. Start the Hub
 
 ```bash
 npm run docker:hub:up
@@ -73,17 +103,33 @@ or:
 docker compose up --build -d hub
 ```
 
-### 3. Smoke test
+### 4. Smoke test
 
 ```bash
 npm run docker:hub:smoke
 ```
 
-### 4. Open the UI
+### 5. Open the UI
 
 - URL: `http://localhost:4300` or your configured public URL
 - Username: `admin` by default
-- Password: `CODEXUI_ADMIN_PASSWORD`
+- Password: the plaintext password used to generate `CODEXUI_ADMIN_PASSWORD_HASH`
+
+## Bootstrap admin credential precedence
+
+The Hub resolves bootstrap admin credentials in this order:
+
+1. `CODEXUI_ADMIN_PASSWORD_HASH_FILE`
+2. `CODEXUI_ADMIN_PASSWORD_HASH`
+3. `CODEXUI_ADMIN_PASSWORD_FILE`
+4. `CODEXUI_ADMIN_PASSWORD`
+
+Rules:
+
+- hash inputs and plaintext inputs **cannot be combined**
+- hash-file and hash-env cannot both be set
+- plaintext-file and plaintext-env cannot both be set
+- plaintext is still supported for backwards compatibility, but hash-based bootstrap is recommended
 
 ## Docker layout
 
@@ -152,7 +198,7 @@ This is optional. The primary deployment model is still **Hub + remote Connector
 ```bash
 npm ci
 npm run build
-node dist-cli/index.js --host 0.0.0.0 --port 4300 --password admin
+node dist-cli/index.js --host 0.0.0.0 --port 4300 --password-hash 'scrypt$...'
 ```
 
 Useful environment variables:
@@ -160,6 +206,8 @@ Useful environment variables:
 - `CODEXUI_BIND_HOST`
 - `CODEXUI_PORT`
 - `CODEXUI_ADMIN_USERNAME`
+- `CODEXUI_ADMIN_PASSWORD_HASH`
+- `CODEXUI_ADMIN_PASSWORD`
 - `CODEXUI_OPEN_BROWSER=false`
 - `CODEX_HOME`
 
