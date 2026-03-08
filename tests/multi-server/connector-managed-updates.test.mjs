@@ -50,6 +50,36 @@ test('managed connector runtime bundle rewrites the runner script and preserves 
   assert.match(rewrittenRunner, /continue/u)
 })
 
+test('managed connector job failure reporting rethrows restart signals and only reports real failures', async () => {
+  const module = await loadConnectorModule()
+  assert.equal(typeof module.reportManagedConnectorJobFailure, 'function')
+  assert.equal(typeof module.RelayConnectorControlSignal, 'function')
+
+  let reported = 0
+  await assert.rejects(
+    module.reportManagedConnectorJobFailure(
+      async () => {
+        throw new module.RelayConnectorControlSignal('restart')
+      },
+      async () => {
+        reported += 1
+      },
+    ),
+  )
+  assert.equal(reported, 0)
+
+  await module.reportManagedConnectorJobFailure(
+    async () => {
+      throw new Error('boom')
+    },
+    async (error) => {
+      assert.match(String(error), /boom/u)
+      reported += 1
+    },
+  )
+  assert.equal(reported, 1)
+})
+
 test('managed connector update stages a verified artifact and finalizes the pending job after restart', async () => {
   const module = await loadConnectorModule()
   assert.equal(typeof module.createManagedConnectorRuntimeState, 'function')

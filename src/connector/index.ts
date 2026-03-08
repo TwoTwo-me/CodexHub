@@ -743,6 +743,20 @@ async function reportManagedConnectorJobStatus(input: {
   }
 }
 
+export async function reportManagedConnectorJobFailure(
+  operation: () => Promise<void>,
+  onFailure: (error: unknown) => Promise<void>,
+): Promise<void> {
+  try {
+    await operation()
+  } catch (error) {
+    if (error instanceof RelayConnectorControlSignal) {
+      throw error
+    }
+    await onFailure(error)
+  }
+}
+
 async function runConnectorLoop(input: {
   hubAddress: string
   token: string
@@ -781,15 +795,16 @@ async function runConnectorLoop(input: {
     ...(input.relayE2ee ? { relayE2ee: input.relayE2ee } : {}),
     onLog: (level, message) => logger(level, message),
     afterPoll: async () => {
-      if (!input.runtimeStateFile?.trim()) {
+      const runtimeStateFile = input.runtimeStateFile?.trim()
+      if (!runtimeStateFile) {
         return
       }
 
       try {
-        const currentState = await readManagedConnectorRuntimeState(input.runtimeStateFile.trim())
+        const currentState = await readManagedConnectorRuntimeState(runtimeStateFile)
         if (currentState?.pendingJobId) {
           const finalizeResult = await finalizeManagedConnectorJob({
-            runtimeStateFile: input.runtimeStateFile.trim(),
+            runtimeStateFile,
             currentVersion: telemetry.connectorVersion,
           }, {
             reportStatus: async (update) => {
@@ -820,9 +835,9 @@ async function runConnectorLoop(input: {
         if (!job) {
           return
         }
-        try {
+        await reportManagedConnectorJobFailure(async () => {
           const result = await applyManagedConnectorJob({
-            runtimeStateFile: input.runtimeStateFile.trim(),
+            runtimeStateFile,
             job,
           }, {
             reportStatus: async (update) => {
@@ -839,7 +854,7 @@ async function runConnectorLoop(input: {
           if (result.restartRequested) {
             throw new RelayConnectorControlSignal('restart')
           }
-        } catch (error) {
+        }, async (error) => {
           await reportManagedConnectorJobStatus({
             hubAddress: input.hubAddress,
             token: input.token,
@@ -853,7 +868,7 @@ async function runConnectorLoop(input: {
               errorMessage: error instanceof Error ? error.message : 'Managed connector job failed',
             },
           })
-        }
+        })
       } catch (error) {
         if (error instanceof RelayConnectorControlSignal) {
           throw error
@@ -1266,7 +1281,7 @@ function isMainModule(): boolean {
   }
 }
 
-export { CodexRelayConnector } from './core.js'
+export { CodexRelayConnector, RelayConnectorControlSignal } from './core.js'
 export { LocalCodexAppServer } from './localCodexAppServer.js'
 export {
   createConnectorInstallCommand,
