@@ -6,6 +6,8 @@ x-codex-cli-service: &codex-cli-service
     dockerfile: docker/multi-server/Dockerfile.codex-cli
   environment:
     CODEX_HOME: /root/.codex
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   volumes:
     - ${CODEX_MULTI_SERVER_AUTH_FILE:-/tmp/codexui-multi-server-auth/auth.json}:/root/.codex/auth.json:ro
 

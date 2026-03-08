@@ -52,7 +52,8 @@
     "docker:multi-server:up": "bash scripts/docker/multi-server-up.sh",
     "docker:multi-server:smoke": "bash scripts/docker/multi-server-smoke.sh",
     "docker:multi-server:down": "bash scripts/docker/multi-server-down.sh",
-    "prepare": "npm run build:cli"
+    "prepare": "npm run build:cli",
+    "docker:multi-server:connect": "node scripts/docker/multi-server-connectors.mjs"
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",
