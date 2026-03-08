@@ -75,7 +75,30 @@ test.beforeEach(async ({ page }) => {
     }
 
     if (method === 'thread/read') {
-      const markdownText = '# Heading\n\n- Alpha\n- Beta\n\n> Quoted text\n\n```ts\nconsole.log(1)\n```\n\nVisit [OpenAI](https://openai.com) and `src/main.ts:12`\n\n![Inline image](https://placehold.co/320x180/png)'
+      const markdownText = [
+        '# Heading',
+        '',
+        'This has **strong**, *emphasis*, ~~strike~~, [OpenAI](https://openai.com), and `src/main.ts:12`.',
+        '',
+        '- Alpha',
+        '- [x] Done',
+        '- [ ] Todo',
+        '',
+        '> Quoted text',
+        '',
+        '---',
+        '',
+        '| Name | Value |',
+        '| --- | --- |',
+        '| A | 1 |',
+        '| B | 2 |',
+        '',
+        '```ts',
+        'console.log(1)',
+        '```',
+        '',
+        'https://platform.openai.com/docs',
+      ].join('\n')
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -106,19 +129,26 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
-test('chat thread renders markdown blocks without using raw html', async ({ page }) => {
+test('chat thread renders practical GFM blocks without raw html', async ({ page }) => {
   ensureDir(SCREENSHOT_DIR)
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE_URL}/thread/thread-markdown`, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(1500)
 
   await expect(page.locator('.message-heading', { hasText: 'Heading' })).toBeVisible()
-  await expect(page.locator('.message-list-item')).toHaveCount(2)
+  await expect(page.locator('.message-inline-strong', { hasText: 'strong' })).toBeVisible()
+  await expect(page.locator('.message-inline-em', { hasText: 'emphasis' })).toBeVisible()
+  await expect(page.locator('.message-inline-strike', { hasText: 'strike' })).toBeVisible()
+  await expect(page.locator('.message-task-list-item')).toHaveCount(2)
+  await expect(page.locator('.message-task-checkbox')).toHaveCount(2)
   await expect(page.locator('.message-blockquote')).toContainText('Quoted text')
+  await expect(page.locator('.message-hr')).toHaveCount(1)
+  await expect(page.locator('.message-table')).toBeVisible()
+  await expect(page.locator('.message-table tbody tr')).toHaveCount(2)
   await expect(page.locator('.message-code-block')).toContainText('console.log(1)')
-  await expect(page.getByRole('link', { name: 'OpenAI' })).toBeVisible()
+  await expect(page.locator('.message-link[href="https://openai.com"]')).toBeVisible()
+  await expect(page.locator('.message-link[href="https://platform.openai.com/docs"]')).toBeVisible()
   await expect(page.locator('.message-file-link', { hasText: 'main.ts (line 12)' })).toBeVisible()
-  await expect(page.locator('.message-markdown-image')).toBeVisible()
 
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/chat-markdown-rendering-desktop.png`,

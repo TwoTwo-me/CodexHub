@@ -209,6 +209,10 @@ test('home route shows a visible hook alert and thread view shows explicit appro
 
   await expect(page.getByText('Shell command approval')).toBeVisible()
   await expect(page.getByText('hostname', { exact: true })).toBeVisible()
+  await expect(page.locator('.conversation-list .request-card')).toHaveCount(0)
+  await expect(page.locator('.composer-with-queue > .thread-request-rail')).toBeVisible()
+  const order = await page.locator('.composer-with-queue').evaluate((element) => Array.from(element.children).map((child) => child.className))
+  expect(order).toEqual(['thread-request-rail', 'thread-composer'])
   await expect(page.getByRole('button', { name: 'Approve', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Approve & remember hostname', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
