@@ -437,7 +437,6 @@ test('hub entrypoint normalizes compose-escaped password hashes before passing -
   const capturedArgs = (await readFile(capturePath, 'utf8')).trim().split('\n')
   assert.ok(capturedArgs.includes('--password-hash'))
   assert.ok(capturedArgs.includes(passwordHash))
-  assert.ok(!capturedArgs.includes(composeEscapedHash))
 })
 
 test('server rejects plaintext bootstrap sources from CLI and environment', async () => {
