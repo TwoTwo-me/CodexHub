@@ -272,9 +272,15 @@ test('connector install CLI accepts inline bootstrap token when a token file is 
     const systemdScript = await readFile(resolve(installCwd, 'codexui-connector-edge-laptop-systemd.sh'), 'utf8')
     const pm2Script = await readFile(resolve(installCwd, 'codexui-connector-edge-laptop-pm2.sh'), 'utf8')
     assert.match(startScript, /codexui-connector connect/)
+    assert.match(startScript, /Run this script as the target user without sudo\./)
     assert.match(startScript, /--token-file/)
     assert.match(systemdScript, /systemctl --user enable --now codexui-connector-edge-laptop\.service/)
-    assert.match(pm2Script, /pm2 start "\$HOME\/\.config\/codexui-connector\/edge-laptop\.sh" --name "codexui-connector-edge-laptop"/)
+    assert.doesNotMatch(systemdScript, /\nloginctl enable-linger /)
+    assert.match(systemdScript, /sudo loginctl enable-linger \$USER/)
+    assert.match(pm2Script, /\$HOME\/\.local\/share\/codexui-connector\/pm2\/node_modules\/\.bin\/pm2/)
+    assert.match(pm2Script, /npm install --prefix "\$HOME\/\.local\/share\/codexui-connector\/pm2" pm2/)
+    assert.match(pm2Script, /pm2 startup/)
+    assert.doesNotMatch(pm2Script, /npm install -g pm2/)
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => {

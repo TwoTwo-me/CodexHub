@@ -48,6 +48,10 @@ npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector inst
 - `systemd.sh` — user systemd 등록용
 - `pm2.sh` — PM2 등록용
 
+이 helper script들은 **모두 현재 사용자 기준**으로 만들어지므로 `sudo` 없이 실행해야 합니다.
+- user systemd는 `systemctl --user` 를 사용합니다
+- PM2는 `$HOME/.local/share/codexui-connector/pm2` 아래에 user-local 설치를 사용합니다
+
 ### 2. 원격 호스트 요구사항
 
 - Node.js 18+

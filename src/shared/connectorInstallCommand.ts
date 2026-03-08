@@ -20,6 +20,14 @@ function getRunnerScriptPath(connectorId: string): string {
   return `$HOME/.config/codexui-connector/${connectorId}.sh`
 }
 
+function getPm2InstallRoot(): string {
+  return '$HOME/.local/share/codexui-connector/pm2'
+}
+
+function getPm2BinaryPath(): string {
+  return `${getPm2InstallRoot()}/node_modules/.bin/pm2`
+}
+
 function getSystemdUnitName(connectorId: string): string {
   return `codexui-connector-${connectorId}.service`
 }
@@ -80,7 +88,6 @@ export function createConnectorSystemdUserRegistrationCommand(
     'EOF',
     'systemctl --user daemon-reload',
     `systemctl --user enable --now ${unitName}`,
-    'loginctl enable-linger "$USER"',
   ].join('\n')
 }
 
@@ -93,15 +100,15 @@ export function createConnectorPm2RegistrationCommand(
 
   return [
     'mkdir -p "$HOME/.config/codexui-connector"',
+    `if [ ! -x "${getPm2BinaryPath()}" ]; then npm install --prefix "${getPm2InstallRoot()}" pm2; fi`,
     `cat > ${JSON.stringify(runnerScriptPath)} <<'EOF'`,
     '#!/usr/bin/env bash',
     `exec ${connectCommand}`,
     'EOF',
     `chmod 700 ${JSON.stringify(runnerScriptPath)}`,
-    'npm install -g pm2',
-    `pm2 start ${JSON.stringify(runnerScriptPath)} --name ${JSON.stringify(pm2Name)}`,
-    'pm2 save',
-    'pm2 startup',
+    'export PM2_HOME="$HOME/.pm2"',
+    `"${getPm2BinaryPath()}" start ${JSON.stringify(runnerScriptPath)} --name ${JSON.stringify(pm2Name)}`,
+    `"${getPm2BinaryPath()}" save`,
   ].join('\n')
 }
 

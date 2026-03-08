@@ -71,6 +71,8 @@ During `install` the Connector:
    - `codexui-connector-<id>-systemd.sh`
    - `codexui-connector-<id>-pm2.sh`
 
+Run those helper scripts as the target user **without `sudo`** so they keep using that user's `$HOME`, Codex auth, and connector token paths.
+
 ### 2. Start the Connector runtime
 
 ```bash
@@ -81,6 +83,9 @@ npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector conn
 ```
 
 `install` still prints the direct `connect` command inline, but the systemd / PM2 registration steps are now also written into the helper shell scripts above so operators can simply run those files from the directory where they performed the install.
+
+- `systemd.sh` registers a **user** service with `systemctl --user`
+- `pm2.sh` installs PM2 into a user-local path under `$HOME/.local/share/codexui-connector/pm2`
 
 ## Useful flags
 

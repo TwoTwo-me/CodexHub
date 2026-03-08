@@ -380,11 +380,19 @@ async function writeConnectorHelperScripts(input: {
   const startScriptPath = getConnectorHelperScriptPath(input.connectorId, 'start')
   const systemdScriptPath = getConnectorHelperScriptPath(input.connectorId, 'systemd')
   const pm2ScriptPath = getConnectorHelperScriptPath(input.connectorId, 'pm2')
+  const sudoGuardLines = [
+    'if [ -n "${SUDO_USER:-}" ]; then',
+    '  echo "Run this script as the target user without sudo." >&2',
+    '  exit 1',
+    'fi',
+    '',
+  ].join('\n')
 
   await writeExecutableScript(startScriptPath, [
     '#!/usr/bin/env bash',
     'set -euo pipefail',
     '',
+    sudoGuardLines,
     `exec ${input.connectCommand}`,
     '',
   ].join('\n'))
@@ -392,14 +400,26 @@ async function writeConnectorHelperScripts(input: {
     '#!/usr/bin/env bash',
     'set -euo pipefail',
     '',
+    sudoGuardLines,
     input.systemdRegistrationCommand,
+    '',
+    'echo',
+    'echo "User systemd registration complete."',
+    'echo "If you want the connector to start before login after reboot, ask an administrator to run:"',
+    'echo "  sudo loginctl enable-linger $USER"',
     '',
   ].join('\n'))
   await writeExecutableScript(pm2ScriptPath, [
     '#!/usr/bin/env bash',
     'set -euo pipefail',
     '',
+    sudoGuardLines,
     input.pm2RegistrationCommand,
+    '',
+    'echo',
+    'echo "PM2 registration complete for user $USER."',
+    'echo "For reboot persistence, run pm2 startup and follow the platform-specific instructions if supported:"',
+    'echo "  $HOME/.local/share/codexui-connector/pm2/node_modules/.bin/pm2 startup"',
     '',
   ].join('\n'))
 
