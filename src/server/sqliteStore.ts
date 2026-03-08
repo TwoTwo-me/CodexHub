@@ -120,6 +120,7 @@ function ensurePushSubscriptionsTable(database: SqliteDatabase): void {
       user_id TEXT NOT NULL,
       endpoint TEXT NOT NULL UNIQUE,
       subscription_json TEXT NOT NULL,
+      device_alias TEXT,
       user_agent TEXT,
       platform TEXT,
       created_at_iso TEXT NOT NULL,
@@ -130,6 +131,12 @@ function ensurePushSubscriptionsTable(database: SqliteDatabase): void {
     );
     CREATE INDEX IF NOT EXISTS push_subscriptions_user_id_idx ON push_subscriptions(user_id);
   `)
+
+  const columns = database.prepare('PRAGMA table_info(push_subscriptions)').all() as Array<{ name: string }>
+  const columnNames = new Set(columns.map((column) => column.name))
+  if (!columnNames.has('device_alias')) {
+    database.exec('ALTER TABLE push_subscriptions ADD COLUMN device_alias TEXT')
+  }
 }
 
 function initializeDatabase(database: SqliteDatabase): void {

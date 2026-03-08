@@ -12,8 +12,11 @@ import { readHubStatePayload, writeHubStatePayload } from './sqliteStore.js'
 import { OutboundRelayHub, RelayHubError } from './relay/relayHub.js'
 import { approveUser, listUsers } from './userStore.js'
 import {
+  deletePushSubscriptionForUserById,
   deletePushSubscriptionForUser,
+  getPushSubscriptionForUserById,
   listPushSubscriptionsForUser,
+  updatePushSubscriptionAliasForUser,
   upsertPushSubscriptionForUser,
 } from './pushSubscriptionStore.js'
 import { getWebPushClientConfig, sendHookPushNotificationsToUser } from './webPushService.js'
@@ -229,6 +232,32 @@ function setJson(res: ServerResponse, statusCode: number, payload: unknown): voi
   res.statusCode = statusCode
   res.setHeader('Content-Type', 'application/json; charset=utf-8')
   res.end(JSON.stringify(payload))
+}
+
+function toPublicPushSubscriptionRecord(subscription: {
+  id: string
+  endpoint: string
+  createdAtIso: string
+  updatedAtIso: string
+  failureCount: number
+  deviceAlias?: string
+  platform?: string
+  userAgent?: string
+  lastSuccessAtIso?: string
+  lastFailureAtIso?: string
+}): Record<string, unknown> {
+  return {
+    id: subscription.id,
+    endpoint: subscription.endpoint,
+    createdAtIso: subscription.createdAtIso,
+    updatedAtIso: subscription.updatedAtIso,
+    failureCount: subscription.failureCount,
+    ...(subscription.deviceAlias ? { deviceAlias: subscription.deviceAlias } : { deviceAlias: '' }),
+    ...(subscription.platform ? { platform: subscription.platform } : {}),
+    ...(subscription.userAgent ? { userAgent: subscription.userAgent } : {}),
+    ...(subscription.lastSuccessAtIso ? { lastSuccessAtIso: subscription.lastSuccessAtIso } : {}),
+    ...(subscription.lastFailureAtIso ? { lastFailureAtIso: subscription.lastFailureAtIso } : {}),
+  }
 }
 
 function getCodexHomeDir(): string {
@@ -3323,16 +3352,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
-        const subscriptions = listPushSubscriptionsForUser(authenticatedUser.id).map((subscription) => ({
-          endpoint: subscription.endpoint,
-          createdAtIso: subscription.createdAtIso,
-          updatedAtIso: subscription.updatedAtIso,
-          failureCount: subscription.failureCount,
-          ...(subscription.platform ? { platform: subscription.platform } : {}),
-          ...(subscription.userAgent ? { userAgent: subscription.userAgent } : {}),
-          ...(subscription.lastSuccessAtIso ? { lastSuccessAtIso: subscription.lastSuccessAtIso } : {}),
-          ...(subscription.lastFailureAtIso ? { lastFailureAtIso: subscription.lastFailureAtIso } : {}),
-        }))
+        const subscriptions = listPushSubscriptionsForUser(authenticatedUser.id).map(toPublicPushSubscriptionRecord)
         setJson(res, 200, {
           data: {
             subscriptions,
@@ -3359,21 +3379,68 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           const stored = upsertPushSubscriptionForUser(authenticatedUser.id, {
             endpoint: typeof subscription.endpoint === 'string' ? subscription.endpoint : '',
             subscription,
+            deviceAlias: typeof payload?.deviceAlias === 'string' ? payload.deviceAlias : '',
             platform: typeof payload?.platform === 'string' ? payload.platform : '',
             userAgent: typeof payload?.userAgent === 'string' ? payload.userAgent : '',
           })
           setJson(res, 201, {
-            data: {
-              endpoint: stored.endpoint,
-              createdAtIso: stored.createdAtIso,
-              updatedAtIso: stored.updatedAtIso,
-              ...(stored.platform ? { platform: stored.platform } : {}),
-              ...(stored.userAgent ? { userAgent: stored.userAgent } : {}),
-            },
+            data: toPublicPushSubscriptionRecord(stored),
           })
         } catch (error) {
           setJson(res, 400, { error: getErrorMessage(error, 'Failed to save push subscription') })
         }
+        return
+      }
+
+      const pwaSubscriptionIdMatch = /^\/codex-api\/pwa\/subscriptions\/([^/]+)$/u.exec(url.pathname)
+      if (pwaSubscriptionIdMatch && req.method === 'PATCH') {
+        const authenticatedUser = getRequestAuthenticatedUser(req)
+        if (!authenticatedUser) {
+          setJson(res, 401, { error: 'Authentication required' })
+          return
+        }
+
+        const subscriptionId = decodeURIComponent(pwaSubscriptionIdMatch[1] ?? '').trim()
+        if (!subscriptionId) {
+          setJson(res, 400, { error: 'Subscription id is required.' })
+          return
+        }
+
+        const payload = asRecord(await readJsonBody(req))
+        const updated = updatePushSubscriptionAliasForUser(
+          authenticatedUser.id,
+          subscriptionId,
+          typeof payload?.deviceAlias === 'string' ? payload.deviceAlias : '',
+        )
+        if (!updated) {
+          setJson(res, 404, { error: 'Push subscription not found.' })
+          return
+        }
+        setJson(res, 200, { data: toPublicPushSubscriptionRecord(updated) })
+        return
+      }
+
+      if (pwaSubscriptionIdMatch && req.method === 'DELETE') {
+        const authenticatedUser = getRequestAuthenticatedUser(req)
+        if (!authenticatedUser) {
+          setJson(res, 401, { error: 'Authentication required' })
+          return
+        }
+
+        const subscriptionId = decodeURIComponent(pwaSubscriptionIdMatch[1] ?? '').trim()
+        if (!subscriptionId) {
+          setJson(res, 400, { error: 'Subscription id is required.' })
+          return
+        }
+
+        const existing = getPushSubscriptionForUserById(authenticatedUser.id, subscriptionId)
+        if (!existing) {
+          setJson(res, 404, { error: 'Push subscription not found.' })
+          return
+        }
+
+        deletePushSubscriptionForUserById(authenticatedUser.id, subscriptionId)
+        setJson(res, 200, { ok: true })
         return
       }
 

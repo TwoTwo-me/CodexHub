@@ -6,6 +6,7 @@ export type StoredPushSubscription = {
   userId: string
   endpoint: string
   subscription: Record<string, unknown>
+  deviceAlias?: string
   createdAtIso: string
   updatedAtIso: string
   lastSuccessAtIso?: string
@@ -18,6 +19,7 @@ export type StoredPushSubscription = {
 export type PushSubscriptionInput = {
   endpoint: string
   subscription: Record<string, unknown>
+  deviceAlias?: string
   userAgent?: string
   platform?: string
 }
@@ -60,6 +62,7 @@ function normalizeStoredRow(row: Record<string, unknown>): StoredPushSubscriptio
     userId,
     endpoint,
     subscription,
+    ...(readString(row.device_alias) ? { deviceAlias: readString(row.device_alias) } : {}),
     createdAtIso,
     updatedAtIso,
     ...(readString(row.last_success_at_iso) ? { lastSuccessAtIso: readString(row.last_success_at_iso) } : {}),
@@ -106,6 +109,7 @@ export function listPushSubscriptionsForUser(userId: string): StoredPushSubscrip
         user_id,
         endpoint,
         subscription_json,
+        device_alias,
         user_agent,
         platform,
         created_at_iso,
@@ -133,6 +137,7 @@ export function upsertPushSubscriptionForUser(userId: string, input: PushSubscri
   }
 
   const subscription = normalizeSubscriptionPayload(input.subscription)
+  const normalizedDeviceAlias = readString(input.deviceAlias) || null
   const nowIso = new Date().toISOString()
   const existing = getHubDatabase()
     .prepare('SELECT id, created_at_iso FROM push_subscriptions WHERE endpoint = ? LIMIT 1')
@@ -147,6 +152,7 @@ export function upsertPushSubscriptionForUser(userId: string, input: PushSubscri
       user_id,
       endpoint,
       subscription_json,
+      device_alias,
       user_agent,
       platform,
       created_at_iso,
@@ -155,10 +161,11 @@ export function upsertPushSubscriptionForUser(userId: string, input: PushSubscri
       last_failure_at_iso,
       failure_count
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0)
     ON CONFLICT(endpoint) DO UPDATE SET
       user_id = excluded.user_id,
       subscription_json = excluded.subscription_json,
+      device_alias = COALESCE(excluded.device_alias, push_subscriptions.device_alias),
       user_agent = excluded.user_agent,
       platform = excluded.platform,
       updated_at_iso = excluded.updated_at_iso
@@ -167,6 +174,7 @@ export function upsertPushSubscriptionForUser(userId: string, input: PushSubscri
     normalizedUserId,
     endpoint,
     JSON.stringify(subscription),
+    normalizedDeviceAlias,
     input.userAgent?.trim() || null,
     input.platform?.trim() || null,
     createdAtIso,
@@ -180,6 +188,7 @@ export function upsertPushSubscriptionForUser(userId: string, input: PushSubscri
         user_id,
         endpoint,
         subscription_json,
+        device_alias,
         user_agent,
         platform,
         created_at_iso,
@@ -207,6 +216,62 @@ export function deletePushSubscriptionForUser(userId: string, endpoint: string):
   getHubDatabase()
     .prepare('DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?')
     .run(normalizedUserId, normalizedEndpoint)
+}
+
+export function getPushSubscriptionForUserById(userId: string, id: string): StoredPushSubscription | null {
+  const normalizedUserId = userId.trim()
+  const normalizedId = id.trim()
+  if (!normalizedUserId || !normalizedId) return null
+
+  const row = getHubDatabase()
+    .prepare(`
+      SELECT
+        id,
+        user_id,
+        endpoint,
+        subscription_json,
+        device_alias,
+        user_agent,
+        platform,
+        created_at_iso,
+        updated_at_iso,
+        last_success_at_iso,
+        last_failure_at_iso,
+        failure_count
+      FROM push_subscriptions
+      WHERE user_id = ? AND id = ?
+      LIMIT 1
+    `)
+    .get(normalizedUserId, normalizedId) as Record<string, unknown> | undefined
+
+  return row ? normalizeStoredRow(row) : null
+}
+
+export function updatePushSubscriptionAliasForUser(userId: string, id: string, deviceAlias: string): StoredPushSubscription | null {
+  const normalizedUserId = userId.trim()
+  const normalizedId = id.trim()
+  if (!normalizedUserId || !normalizedId) return null
+
+  const nowIso = new Date().toISOString()
+  getHubDatabase().prepare(`
+    UPDATE push_subscriptions
+    SET
+      device_alias = ?,
+      updated_at_iso = ?
+    WHERE user_id = ? AND id = ?
+  `).run(readString(deviceAlias) || null, nowIso, normalizedUserId, normalizedId)
+
+  return getPushSubscriptionForUserById(normalizedUserId, normalizedId)
+}
+
+export function deletePushSubscriptionForUserById(userId: string, id: string): boolean {
+  const normalizedUserId = userId.trim()
+  const normalizedId = id.trim()
+  if (!normalizedUserId || !normalizedId) return false
+  const result = getHubDatabase()
+    .prepare('DELETE FROM push_subscriptions WHERE user_id = ? AND id = ?')
+    .run(normalizedUserId, normalizedId)
+  return result.changes > 0
 }
 
 export function deletePushSubscriptionByEndpoint(endpoint: string): void {
