@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { getHubDatabase } from './sqliteStore.js'
 
+export const MAX_PUSH_SUBSCRIPTION_DEVICE_ALIAS_LENGTH = 30
+
 export type StoredPushSubscription = {
   id: string
   userId: string
@@ -32,6 +34,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function readString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeDeviceAlias(value: unknown): string | undefined {
+  const alias = readString(value)
+  if (!alias) return undefined
+  if (alias.length > MAX_PUSH_SUBSCRIPTION_DEVICE_ALIAS_LENGTH) {
+    throw new Error(`Device alias must be ${String(MAX_PUSH_SUBSCRIPTION_DEVICE_ALIAS_LENGTH)} characters or fewer.`)
+  }
+  return alias
 }
 
 function normalizeStoredRow(row: Record<string, unknown>): StoredPushSubscription | null {
@@ -137,7 +148,7 @@ export function upsertPushSubscriptionForUser(userId: string, input: PushSubscri
   }
 
   const subscription = normalizeSubscriptionPayload(input.subscription)
-  const normalizedDeviceAlias = readString(input.deviceAlias) || null
+  const normalizedDeviceAlias = normalizeDeviceAlias(input.deviceAlias) ?? null
   const nowIso = new Date().toISOString()
   const existing = getHubDatabase()
     .prepare('SELECT id, created_at_iso FROM push_subscriptions WHERE endpoint = ? LIMIT 1')
@@ -259,7 +270,7 @@ export function updatePushSubscriptionAliasForUser(userId: string, id: string, d
       device_alias = ?,
       updated_at_iso = ?
     WHERE user_id = ? AND id = ?
-  `).run(readString(deviceAlias) || null, nowIso, normalizedUserId, normalizedId)
+  `).run(normalizeDeviceAlias(deviceAlias) ?? null, nowIso, normalizedUserId, normalizedId)
 
   return getPushSubscriptionForUserById(normalizedUserId, normalizedId)
 }

@@ -281,6 +281,7 @@ test('settings page shows all notification devices and allows alias edits', asyn
   await expect(page.getByText('Current browser')).toBeVisible()
 
   await page.getByRole('button', { name: 'Edit alias for iPhone Safari' }).click()
+  await expect(page.getByLabel('Device alias')).toHaveAttribute('maxlength', '30')
   await page.getByLabel('Device alias').fill('Team iPhone')
   await page.getByRole('button', { name: 'Save alias' }).click()
   await expect(page.locator('.notification-device-name', { hasText: 'Team iPhone' })).toBeVisible()

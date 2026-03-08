@@ -3407,16 +3407,20 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         }
 
         const payload = asRecord(await readJsonBody(req))
-        const updated = updatePushSubscriptionAliasForUser(
-          authenticatedUser.id,
-          subscriptionId,
-          typeof payload?.deviceAlias === 'string' ? payload.deviceAlias : '',
-        )
-        if (!updated) {
-          setJson(res, 404, { error: 'Push subscription not found.' })
-          return
+        try {
+          const updated = updatePushSubscriptionAliasForUser(
+            authenticatedUser.id,
+            subscriptionId,
+            typeof payload?.deviceAlias === 'string' ? payload.deviceAlias : '',
+          )
+          if (!updated) {
+            setJson(res, 404, { error: 'Push subscription not found.' })
+            return
+          }
+          setJson(res, 200, { data: toPublicPushSubscriptionRecord(updated) })
+        } catch (error) {
+          setJson(res, 400, { error: getErrorMessage(error, 'Failed to update push subscription alias') })
         }
-        setJson(res, 200, { data: toPublicPushSubscriptionRecord(updated) })
         return
       }
 

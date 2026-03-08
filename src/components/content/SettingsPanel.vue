@@ -405,8 +405,10 @@
                   type="text"
                   aria-label="Device alias"
                   autocomplete="off"
+                  maxlength="30"
                 />
               </label>
+              <p class="settings-field-help">Up to 30 characters.</p>
               <div class="settings-inline-actions">
                 <button type="button" class="settings-secondary-button" @click="cancelRenamingBrowserDevice">
                   Cancel

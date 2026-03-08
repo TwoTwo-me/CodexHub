@@ -385,3 +385,31 @@ test('refreshing the current browser subscription keeps the same device id and a
     await server.stop()
   }
 })
+
+test('device alias updates reject values longer than 30 characters', async () => {
+  const server = await startServer()
+
+  try {
+    const bootstrapCookie = await login(server.baseUrl, 'bootstrap-admin', 'bootstrap-pass-1')
+    await completeBootstrap(server.baseUrl, bootstrapCookie)
+    const adminCookie = await login(server.baseUrl, 'primary-admin', 'primary-pass-2')
+    const ownerCookie = await createApprovedUser(server.baseUrl, adminCookie, 'alias-owner')
+
+    const createResponse = await createPushSubscription(server.baseUrl, ownerCookie, 'https://push.example.test/subscriptions/alias-limit', 'Android')
+    assert.equal(createResponse.status, 201)
+    const [storedSubscription] = await listPushSubscriptions(server.baseUrl, ownerCookie)
+    assert.ok(storedSubscription)
+
+    const tooLongAlias = 'A'.repeat(31)
+    const renameResponse = await patchJson(
+      `${server.baseUrl}/codex-api/pwa/subscriptions/${encodeURIComponent(storedSubscription.id)}`,
+      { deviceAlias: tooLongAlias },
+      { Cookie: ownerCookie },
+    )
+    assert.equal(renameResponse.status, 400)
+    const renameBody = await renameResponse.json()
+    assert.match(renameBody.error, /30 characters or fewer/u)
+  } finally {
+    await server.stop()
+  }
+})
