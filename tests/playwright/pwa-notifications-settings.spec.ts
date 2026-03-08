@@ -208,9 +208,11 @@ test.beforeEach(async ({ page }) => {
         contentType: 'application/json',
         body: JSON.stringify({
           data: {
+            id: 'sub-current',
             endpoint: body.subscription.endpoint,
             createdAtIso: '2026-03-08T13:15:00.000Z',
             updatedAtIso: '2026-03-08T13:15:00.000Z',
+            deviceAlias: '',
           },
         }),
       })

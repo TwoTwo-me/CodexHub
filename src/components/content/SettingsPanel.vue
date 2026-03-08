@@ -299,7 +299,9 @@
       <div class="settings-status-meta">
         <p>{{ browserNotificationSupportMessage }}</p>
         <p>{{ browserNotificationPermissionMessage }}</p>
-        <p v-if="browserSubscription">Subscribed endpoint saved at {{ browserSubscription.updatedAtIso || browserSubscription.createdAtIso }}</p>
+        <p v-if="currentBrowserSubscription">
+          This browser is registered as {{ formatNotificationDeviceLabel(currentBrowserSubscription) }}.
+        </p>
         <p v-else>No browser subscription stored for this device yet.</p>
       </div>
 
@@ -315,7 +317,7 @@
         <button
           type="button"
           class="settings-secondary-button"
-          :disabled="!browserSubscription || isDisablingBrowserNotifications"
+          :disabled="!currentBrowserSubscription || isDisablingBrowserNotifications"
           @click="void disableNotifications()"
         >
           {{ isDisablingBrowserNotifications ? 'Disabling…' : 'Disable notifications' }}
@@ -328,6 +330,103 @@
       <p class="settings-field-help">
         iPhone push requires adding the Hub to the Home Screen and opening it as a standalone web app before enabling notifications.
       </p>
+
+      <div class="notification-device-panel">
+        <div class="connector-jobs-header">
+          <span class="settings-field-label">Registered devices</span>
+          <span class="notification-device-summary">{{ browserSubscriptions.length }} saved targets</span>
+        </div>
+
+        <ul v-if="browserSubscriptions.length > 0" class="notification-device-list">
+          <li
+            v-for="subscription in browserSubscriptions"
+            :key="subscription.id"
+            class="notification-device-item"
+            :data-current="isCurrentBrowserDevice(subscription)"
+          >
+            <div class="notification-device-row">
+              <div class="notification-device-copy">
+                <div class="notification-device-heading">
+                  <span class="notification-device-name">{{ formatNotificationDeviceLabel(subscription) }}</span>
+                  <span
+                    v-if="isCurrentBrowserDevice(subscription)"
+                    class="connector-status-pill"
+                    data-state="connected"
+                  >
+                    Current browser
+                  </span>
+                </div>
+                <div class="notification-device-meta">
+                  <span>{{ formatNotificationDevicePlatform(subscription) }}</span>
+                  <span>Added {{ formatDate(subscription.createdAtIso) }}</span>
+                  <span>Updated {{ formatDate(subscription.updatedAtIso) }}</span>
+                </div>
+              </div>
+
+              <div class="settings-inline-actions">
+                <button
+                  v-if="renamingBrowserDeviceId !== subscription.id"
+                  type="button"
+                  class="settings-secondary-button settings-secondary-button-small"
+                  :aria-label="`Edit alias for ${formatNotificationDeviceLabel(subscription)}`"
+                  @click="startRenamingBrowserDevice(subscription)"
+                >
+                  Edit alias
+                </button>
+                <button
+                  type="button"
+                  class="settings-danger-button settings-secondary-button-small"
+                  :aria-label="`Delete device ${formatNotificationDeviceLabel(subscription)}`"
+                  :disabled="deletingBrowserDeviceId === subscription.id"
+                  @click="void deleteBrowserDevice(subscription)"
+                >
+                  {{ deletingBrowserDeviceId === subscription.id ? 'Deleting…' : 'Delete device' }}
+                </button>
+              </div>
+            </div>
+
+            <div class="notification-device-meta notification-device-meta-technical">
+              <span>Last success {{ formatDate(subscription.lastSuccessAtIso) }}</span>
+              <span>Last failure {{ formatDate(subscription.lastFailureAtIso) }}</span>
+              <span>Failures {{ subscription.failureCount ?? 0 }}</span>
+            </div>
+            <p class="notification-device-endpoint">{{ truncateEndpoint(subscription.endpoint) }}</p>
+
+            <p v-if="isNotificationDeviceStale(subscription)" class="settings-inline-status settings-inline-status-error">
+              This device may be stale.
+            </p>
+
+            <div v-if="renamingBrowserDeviceId === subscription.id" class="settings-inline-form">
+              <label class="settings-field settings-inline-field">
+                <span class="settings-field-label">Device alias</span>
+                <input
+                  v-model="browserDeviceAliasDraft"
+                  class="settings-field-input"
+                  type="text"
+                  aria-label="Device alias"
+                  autocomplete="off"
+                />
+              </label>
+              <div class="settings-inline-actions">
+                <button type="button" class="settings-secondary-button" @click="cancelRenamingBrowserDevice">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  class="settings-primary-button"
+                  :disabled="deletingBrowserDeviceId === subscription.id"
+                  @click="void saveBrowserDeviceAlias(subscription)"
+                >
+                  Save alias
+                </button>
+              </div>
+            </div>
+          </li>
+        </ul>
+        <div v-else class="settings-empty-state settings-empty-state-compact">
+          No browser notification devices saved yet.
+        </div>
+      </div>
     </section>
 
     <section v-if="selectedInstallArtifact" class="settings-card settings-install-card">
@@ -385,8 +484,11 @@ import {
 import {
   disableBrowserNotifications,
   enableBrowserNotifications,
+  getCurrentBrowserSubscriptionEndpoint,
   getStoredBrowserSubscriptions,
   isBrowserNotificationSupported,
+  renameBrowserNotificationDevice,
+  type StoredBrowserSubscription,
 } from '../../api/pwaGateway'
 import { createConnectorInstallCommand } from '../../shared/connectorInstallCommand'
 
@@ -411,22 +513,17 @@ const isTokenRevealed = ref(false)
 const isLoadingJobs = ref(false)
 const isRestartingConnector = ref(false)
 const isUpdatingConnector = ref(false)
+const renamingBrowserDeviceId = ref('')
+const deletingBrowserDeviceId = ref('')
 const errorMessage = ref('')
 const connectorJobStatusMessage = ref('')
 const renameDraft = ref('')
+const browserDeviceAliasDraft = ref('')
 const pendingDeleteConnectorId = ref('')
 const latestInstallArtifact = ref<InstallArtifact | null>(null)
 const connectorJobs = ref<ConnectorUpdateJobInfo[]>([])
-const browserSubscriptions = ref<Array<{
-  endpoint: string
-  createdAtIso: string
-  updatedAtIso: string
-  failureCount?: number
-  platform?: string
-  userAgent?: string
-  lastSuccessAtIso?: string
-  lastFailureAtIso?: string
-}>>([])
+const browserSubscriptions = ref<StoredBrowserSubscription[]>([])
+const currentBrowserSubscriptionEndpoint = ref('')
 const isEnablingBrowserNotifications = ref(false)
 const isDisablingBrowserNotifications = ref(false)
 const browserNotificationStatusMessage = ref('')
@@ -462,7 +559,11 @@ const selectedInstallCommand = computed(() => {
 })
 
 const isBrowserNotificationsSupported = computed(() => isBrowserNotificationSupported())
-const browserSubscription = computed(() => browserSubscriptions.value[0] ?? null)
+const currentBrowserSubscription = computed(() => {
+  const endpoint = currentBrowserSubscriptionEndpoint.value
+  if (!endpoint) return null
+  return browserSubscriptions.value.find((subscription) => subscription.endpoint === endpoint) ?? null
+})
 const browserNotificationSupportMessage = computed(() => (
   isBrowserNotificationsSupported.value
     ? 'This browser can receive push notifications through the Hub PWA service worker.'
@@ -624,6 +725,49 @@ function formatDate(value?: string): string {
   return parsed.toLocaleString()
 }
 
+function browserFamilyFromUserAgent(userAgent?: string): string {
+  const source = (userAgent ?? '').toLowerCase()
+  if (!source) return 'Browser'
+  if (source.includes('edg/')) return 'Edge'
+  if (source.includes('chrome/')) return 'Chrome'
+  if (source.includes('firefox/')) return 'Firefox'
+  if (source.includes('safari/') && !source.includes('chrome/')) return 'Safari'
+  return 'Browser'
+}
+
+function formatNotificationDevicePlatform(subscription: StoredBrowserSubscription): string {
+  const platform = subscription.platform?.trim() || 'Unknown platform'
+  const browser = browserFamilyFromUserAgent(subscription.userAgent)
+  return `${browser} · ${platform}`
+}
+
+function formatNotificationDeviceLabel(subscription: StoredBrowserSubscription): string {
+  const alias = subscription.deviceAlias?.trim()
+  if (alias) return alias
+  const browser = browserFamilyFromUserAgent(subscription.userAgent)
+  const platform = subscription.platform?.trim() || 'device'
+  return `${platform} ${browser}`
+}
+
+function truncateEndpoint(endpoint: string): string {
+  const normalized = endpoint.trim()
+  if (normalized.length <= 68) return normalized
+  return `${normalized.slice(0, 44)}…${normalized.slice(-18)}`
+}
+
+function isCurrentBrowserDevice(subscription: StoredBrowserSubscription): boolean {
+  return Boolean(
+    currentBrowserSubscriptionEndpoint.value
+      && subscription.endpoint === currentBrowserSubscriptionEndpoint.value,
+  )
+}
+
+function isNotificationDeviceStale(subscription: StoredBrowserSubscription): boolean {
+  const lastFailure = subscription.lastFailureAtIso ? Date.parse(subscription.lastFailureAtIso) : Number.NaN
+  const lastSuccess = subscription.lastSuccessAtIso ? Date.parse(subscription.lastSuccessAtIso) : Number.NaN
+  return (subscription.failureCount ?? 0) > 0 && (!Number.isFinite(lastSuccess) || lastFailure >= lastSuccess)
+}
+
 function resetCreateForm(): void {
   createForm.name = ''
   createForm.id = ''
@@ -669,14 +813,64 @@ async function refreshSelectedConnectorJobs(): Promise<void> {
 async function refreshBrowserSubscriptions(): Promise<void> {
   if (!isBrowserNotificationsSupported.value) {
     browserSubscriptions.value = []
+    currentBrowserSubscriptionEndpoint.value = ''
     return
   }
   try {
+    currentBrowserSubscriptionEndpoint.value = await getCurrentBrowserSubscriptionEndpoint()
     browserSubscriptions.value = await getStoredBrowserSubscriptions()
   } catch (error) {
     browserNotificationStatusMessage.value = error instanceof Error
       ? error.message
       : 'Failed to load browser notification subscriptions'
+  }
+}
+
+function startRenamingBrowserDevice(subscription: StoredBrowserSubscription): void {
+  renamingBrowserDeviceId.value = subscription.id
+  browserDeviceAliasDraft.value = subscription.deviceAlias ?? ''
+}
+
+function cancelRenamingBrowserDevice(): void {
+  renamingBrowserDeviceId.value = ''
+  browserDeviceAliasDraft.value = ''
+}
+
+async function saveBrowserDeviceAlias(subscription: StoredBrowserSubscription): Promise<void> {
+  browserNotificationStatusMessage.value = ''
+  try {
+    const renamed = await renameBrowserNotificationDevice(subscription.id, browserDeviceAliasDraft.value)
+    browserSubscriptions.value = browserSubscriptions.value.map((row) => (row.id === renamed.id ? renamed : row))
+    cancelRenamingBrowserDevice()
+    browserNotificationStatusMessage.value = `Saved alias for ${formatNotificationDeviceLabel(renamed)}.`
+  } catch (error) {
+    browserNotificationStatusMessage.value = error instanceof Error
+      ? error.message
+      : 'Failed to rename browser notification device'
+  }
+}
+
+async function deleteBrowserDevice(subscription: StoredBrowserSubscription): Promise<void> {
+  deletingBrowserDeviceId.value = subscription.id
+  browserNotificationStatusMessage.value = ''
+  try {
+    const removedCurrentBrowser = await disableBrowserNotifications(subscription)
+    browserSubscriptions.value = browserSubscriptions.value.filter((row) => row.id !== subscription.id)
+    if (removedCurrentBrowser) {
+      currentBrowserSubscriptionEndpoint.value = ''
+      browserNotificationStatusMessage.value = 'Notifications disabled for this browser.'
+    } else {
+      browserNotificationStatusMessage.value = `Removed ${formatNotificationDeviceLabel(subscription)} from browser notifications.`
+    }
+    if (renamingBrowserDeviceId.value === subscription.id) {
+      cancelRenamingBrowserDevice()
+    }
+  } catch (error) {
+    browserNotificationStatusMessage.value = error instanceof Error
+      ? error.message
+      : 'Failed to delete browser notification device'
+  } finally {
+    deletingBrowserDeviceId.value = ''
   }
 }
 
@@ -824,7 +1018,11 @@ async function enableNotifications(): Promise<void> {
   browserNotificationStatusMessage.value = ''
   try {
     const stored = await enableBrowserNotifications()
-    browserSubscriptions.value = [stored]
+    currentBrowserSubscriptionEndpoint.value = stored.endpoint
+    browserSubscriptions.value = [
+      stored,
+      ...browserSubscriptions.value.filter((row) => row.id !== stored.id),
+    ]
     browserNotificationStatusMessage.value = 'Notifications enabled for this browser.'
   } catch (error) {
     browserNotificationStatusMessage.value = error instanceof Error
@@ -836,13 +1034,14 @@ async function enableNotifications(): Promise<void> {
 }
 
 async function disableNotifications(): Promise<void> {
-  const subscription = browserSubscription.value
+  const subscription = currentBrowserSubscription.value
   if (!subscription || isDisablingBrowserNotifications.value) return
   isDisablingBrowserNotifications.value = true
   browserNotificationStatusMessage.value = ''
   try {
-    await disableBrowserNotifications(subscription.endpoint)
-    browserSubscriptions.value = []
+    await disableBrowserNotifications(subscription)
+    currentBrowserSubscriptionEndpoint.value = ''
+    browserSubscriptions.value = browserSubscriptions.value.filter((row) => row.id !== subscription.id)
     browserNotificationStatusMessage.value = 'Notifications disabled for this browser.'
   } catch (error) {
     browserNotificationStatusMessage.value = error instanceof Error
@@ -1042,6 +1241,54 @@ watch(selectedConnectorId, () => {
 
 .settings-notifications-card {
   @apply mt-1;
+}
+
+.notification-device-panel {
+  @apply flex flex-col gap-3 rounded-2xl border border-zinc-200 bg-zinc-50 p-4;
+}
+
+.notification-device-summary {
+  @apply text-sm text-zinc-500;
+}
+
+.notification-device-list {
+  @apply m-0 flex list-none flex-col gap-3 p-0;
+}
+
+.notification-device-item {
+  @apply rounded-2xl border border-zinc-200 bg-white p-3;
+}
+
+.notification-device-item[data-current='true'] {
+  @apply border-emerald-300 bg-emerald-50/60;
+}
+
+.notification-device-row {
+  @apply flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between;
+}
+
+.notification-device-copy {
+  @apply flex flex-col gap-1.5;
+}
+
+.notification-device-heading {
+  @apply flex flex-wrap items-center gap-2;
+}
+
+.notification-device-name {
+  @apply text-sm font-semibold text-zinc-900;
+}
+
+.notification-device-meta {
+  @apply flex flex-wrap gap-3 text-xs text-zinc-500;
+}
+
+.notification-device-meta-technical {
+  @apply mt-3;
+}
+
+.notification-device-endpoint {
+  @apply m-0 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 font-mono text-xs text-zinc-600 break-all;
 }
 
 .settings-install-once {

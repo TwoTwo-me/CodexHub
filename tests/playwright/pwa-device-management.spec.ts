@@ -276,14 +276,14 @@ test('settings page shows all notification devices and allows alias edits', asyn
   await page.waitForTimeout(1200)
 
   await expect(page.getByText('Browser notifications')).toBeVisible()
-  await expect(page.getByText('Desk Chrome')).toBeVisible()
-  await expect(page.getByText('iPhone Safari')).toBeVisible()
+  await expect(page.locator('.notification-device-name', { hasText: 'Desk Chrome' })).toBeVisible()
+  await expect(page.locator('.notification-device-name', { hasText: 'iPhone Safari' })).toBeVisible()
   await expect(page.getByText('Current browser')).toBeVisible()
 
   await page.getByRole('button', { name: 'Edit alias for iPhone Safari' }).click()
   await page.getByLabel('Device alias').fill('Team iPhone')
   await page.getByRole('button', { name: 'Save alias' }).click()
-  await expect(page.getByText('Team iPhone')).toBeVisible()
+  await expect(page.locator('.notification-device-name', { hasText: 'Team iPhone' })).toBeVisible()
   await expect(page.getByText('This device may be stale.')).toBeVisible()
 
   await page.screenshot({
@@ -293,7 +293,7 @@ test('settings page shows all notification devices and allows alias edits', asyn
 })
 
 test('deleting the current browser device unsubscribes the local push subscription', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 })
+  await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto(`${BASE_URL}/settings`, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(1200)
 

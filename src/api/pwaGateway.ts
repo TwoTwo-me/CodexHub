@@ -3,8 +3,10 @@ type PwaConfig = {
   subject: string
 }
 
-type StoredBrowserSubscription = {
+export type StoredBrowserSubscription = {
+  id: string
   endpoint: string
+  deviceAlias?: string
   createdAtIso: string
   updatedAtIso: string
   failureCount?: number
@@ -29,6 +31,57 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const base64 = (base64String + padding).replace(/-/gu, '+').replace(/_/gu, '/')
   const rawData = window.atob(base64)
   return Uint8Array.from(rawData, (character) => character.charCodeAt(0))
+}
+
+function normalizeStoredBrowserSubscription(payload: unknown): StoredBrowserSubscription | null {
+  const record = asRecord(payload)
+  if (!record) return null
+
+  const id = readString(record.id)
+  const endpoint = readString(record.endpoint)
+  if (!id || !endpoint) return null
+
+  return {
+    id,
+    endpoint,
+    deviceAlias: readString(record.deviceAlias) || undefined,
+    createdAtIso: readString(record.createdAtIso),
+    updatedAtIso: readString(record.updatedAtIso),
+    ...(typeof record.failureCount === 'number' ? { failureCount: record.failureCount } : {}),
+    ...(readString(record.platform) ? { platform: readString(record.platform) } : {}),
+    ...(readString(record.userAgent) ? { userAgent: readString(record.userAgent) } : {}),
+    ...(readString(record.lastSuccessAtIso) ? { lastSuccessAtIso: readString(record.lastSuccessAtIso) } : {}),
+    ...(readString(record.lastFailureAtIso) ? { lastFailureAtIso: readString(record.lastFailureAtIso) } : {}),
+  }
+}
+
+async function getCurrentPushSubscription(): Promise<PushSubscription | null> {
+  if (!isBrowserNotificationSupported()) return null
+  try {
+    const registration = await navigator.serviceWorker.ready
+    return await registration.pushManager.getSubscription()
+  } catch {
+    return null
+  }
+}
+
+async function deleteBrowserNotificationDeviceById(id: string): Promise<void> {
+  const response = await fetch(`/codex-api/pwa/subscriptions/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: {
+      Accept: 'application/json',
+    },
+  })
+
+  if (response.status === 204) {
+    return
+  }
+
+  const payload = (await response.json()) as unknown
+  const envelope = asRecord(payload)
+  if (!response.ok) {
+    throw new Error(readString(envelope?.error) || 'Failed to delete browser notification device')
+  }
 }
 
 export function isBrowserNotificationSupported(): boolean {
@@ -69,22 +122,7 @@ export async function getStoredBrowserSubscriptions(): Promise<StoredBrowserSubs
     throw new Error(readString(envelope?.error) || 'Failed to load browser notification subscriptions')
   }
   return rows
-    .map((row) => {
-      const record = asRecord(row)
-      if (!record) return null
-      const endpoint = readString(record.endpoint)
-      if (!endpoint) return null
-      return {
-        endpoint,
-        createdAtIso: readString(record.createdAtIso),
-        updatedAtIso: readString(record.updatedAtIso),
-        ...(typeof record.failureCount === 'number' ? { failureCount: record.failureCount } : {}),
-        ...(readString(record.platform) ? { platform: readString(record.platform) } : {}),
-        ...(readString(record.userAgent) ? { userAgent: readString(record.userAgent) } : {}),
-        ...(readString(record.lastSuccessAtIso) ? { lastSuccessAtIso: readString(record.lastSuccessAtIso) } : {}),
-        ...(readString(record.lastFailureAtIso) ? { lastFailureAtIso: readString(record.lastFailureAtIso) } : {}),
-      }
-    })
+    .map(normalizeStoredBrowserSubscription)
     .filter((row): row is StoredBrowserSubscription => row !== null)
 }
 
@@ -100,17 +138,33 @@ async function persistBrowserSubscription(subscription: Record<string, unknown>)
   })
   const payload = (await response.json()) as unknown
   const envelope = asRecord(payload)
-  const data = asRecord(envelope?.data)
-  if (!response.ok || !data) {
+  const normalized = normalizeStoredBrowserSubscription(envelope?.data)
+  if (!response.ok || !normalized) {
     throw new Error(readString(envelope?.error) || 'Failed to save browser notification subscription')
   }
-  return {
-    endpoint: readString(data.endpoint),
-    createdAtIso: readString(data.createdAtIso),
-    updatedAtIso: readString(data.updatedAtIso),
-    ...(readString(data.platform) ? { platform: readString(data.platform) } : {}),
-    ...(readString(data.userAgent) ? { userAgent: readString(data.userAgent) } : {}),
+  return normalized
+}
+
+export async function renameBrowserNotificationDevice(id: string, deviceAlias: string): Promise<StoredBrowserSubscription> {
+  const response = await fetch(`/codex-api/pwa/subscriptions/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ deviceAlias }),
+  })
+  const payload = (await response.json()) as unknown
+  const envelope = asRecord(payload)
+  const normalized = normalizeStoredBrowserSubscription(envelope?.data)
+  if (!response.ok || !normalized) {
+    throw new Error(readString(envelope?.error) || 'Failed to rename browser notification device')
   }
+  return normalized
+}
+
+export async function getCurrentBrowserSubscriptionEndpoint(): Promise<string> {
+  return (await getCurrentPushSubscription())?.endpoint ?? ''
 }
 
 export async function enableBrowserNotifications(): Promise<StoredBrowserSubscription> {
@@ -141,19 +195,26 @@ export async function enableBrowserNotifications(): Promise<StoredBrowserSubscri
   return await persistBrowserSubscription(activeSubscription.toJSON() as Record<string, unknown>)
 }
 
-export async function disableBrowserNotifications(endpointHint?: string): Promise<void> {
-  if (!isBrowserNotificationSupported()) return
-  const registration = await navigator.serviceWorker.ready
-  const subscription = await registration.pushManager.getSubscription()
-  const endpoint = subscription?.endpoint || endpointHint || ''
-  if (endpoint) {
+export async function disableBrowserNotifications(subscription?: Pick<StoredBrowserSubscription, 'id' | 'endpoint'>): Promise<boolean> {
+  if (!isBrowserNotificationSupported()) return false
+  const localSubscription = await getCurrentPushSubscription()
+  const localEndpoint = localSubscription?.endpoint ?? ''
+  const targetEndpoint = subscription?.endpoint || localEndpoint
+  const isCurrentBrowserDevice = Boolean(localEndpoint && targetEndpoint && localEndpoint === targetEndpoint)
+
+  if (subscription?.id) {
+    await deleteBrowserNotificationDeviceById(subscription.id)
+  } else if (targetEndpoint) {
     await fetch('/codex-api/pwa/subscriptions', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ endpoint }),
+      body: JSON.stringify({ endpoint: targetEndpoint }),
     })
   }
-  if (subscription) {
-    await subscription.unsubscribe().catch(() => {})
+
+  if (isCurrentBrowserDevice && localSubscription) {
+    await localSubscription.unsubscribe().catch(() => {})
   }
+
+  return isCurrentBrowserDevice
 }
