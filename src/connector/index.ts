@@ -47,11 +47,10 @@ export {
   writeManagedConnectorRuntimeState,
 } from './managedUpdates.js'
 
-async function readConnectorVersion(): Promise<string> {
+export async function readConnectorVersion(): Promise<string> {
   try {
     const packageJsonPath = join(__dirname, '..', 'package.json')
-    const response = await fetch(`file://${packageJsonPath}`)
-    const parsed = (await response.json()) as { version?: unknown }
+    const parsed = JSON.parse(await readFile(packageJsonPath, 'utf8')) as { version?: unknown }
     return typeof parsed.version === 'string' ? parsed.version : 'unknown'
   } catch {
     return 'unknown'

@@ -13,6 +13,14 @@ async function loadConnectorModule() {
   return await import(`${moduleUrl}?t=${Date.now()}`)
 }
 
+test('connector package telemetry reports the installed package version', async () => {
+  const module = await loadConnectorModule()
+  assert.equal(typeof module.readConnectorVersion, 'function')
+
+  const reportedVersion = await module.readConnectorVersion()
+  assert.equal(reportedVersion, '0.1.4')
+})
+
 test('managed connector update stages a verified artifact and finalizes the pending job after restart', async () => {
   const module = await loadConnectorModule()
   assert.equal(typeof module.createManagedConnectorRuntimeState, 'function')
