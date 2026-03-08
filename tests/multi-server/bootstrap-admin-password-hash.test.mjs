@@ -410,6 +410,36 @@ test('hub entrypoint translates password hash settings into --password-hash and 
   assert.match(`${mixedResult.stdout}\n${mixedResult.stderr}`, /no longer supported|plaintext bootstrap/i)
 })
 
+test('hub entrypoint normalizes compose-escaped password hashes before passing --password-hash', async () => {
+  const passwordHash = await generatePasswordHash('entrypoint-secret-2')
+  const composeEscapedHash = passwordHash.replace(/\$/gu, '$$')
+  const tempDir = await mkdtemp(join(tmpdir(), 'codexui-entrypoint-compose-'))
+  const binDir = join(tempDir, 'bin')
+  const capturePath = join(tempDir, 'node-args.txt')
+  const codeHome = join(tempDir, 'codex-home')
+
+  await mkdir(binDir, { recursive: true })
+  await writeFile(join(binDir, 'node'), `#!/usr/bin/env sh\nprintf '%s\\n' \"$@\" > \"${capturePath}\"\n`, {
+    encoding: 'utf8',
+    mode: 0o755,
+  })
+
+  const entrypointResult = await runProcess('sh', [entrypointPath], {
+    cwd: repoRoot,
+    env: {
+      PATH: `${binDir}:${process.env.PATH}`,
+      CODEX_HOME: codeHome,
+      CODEXUI_ADMIN_PASSWORD_HASH: composeEscapedHash,
+    },
+  })
+  assert.equal(entrypointResult.exitCode, 0, entrypointResult.stderr || entrypointResult.stdout)
+
+  const capturedArgs = (await readFile(capturePath, 'utf8')).trim().split('\n')
+  assert.ok(capturedArgs.includes('--password-hash'))
+  assert.ok(capturedArgs.includes(passwordHash))
+  assert.ok(!capturedArgs.includes(composeEscapedHash))
+})
+
 test('server rejects plaintext bootstrap sources from CLI and environment', async () => {
   const cliResult = await runCommand([
     'dist-cli/index.js',

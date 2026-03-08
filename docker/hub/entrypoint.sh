@@ -22,6 +22,10 @@ read_secret_file() {
   tr -d '\r\n' < "$secret_file"
 }
 
+normalize_secret_value() {
+  printf '%s' "$1" | sed 's/\$\$/\$/g'
+}
+
 hash_sources=0
 plaintext_sources=0
 [ -n "$PASSWORD_HASH_FILE" ] && hash_sources=$((hash_sources + 1))
@@ -46,9 +50,9 @@ fi
 
 PASSWORD_HASH=""
 if [ -n "$PASSWORD_HASH_FILE" ]; then
-  PASSWORD_HASH="$(read_secret_file "$PASSWORD_HASH_FILE")"
+  PASSWORD_HASH="$(normalize_secret_value "$(read_secret_file "$PASSWORD_HASH_FILE")")"
 elif [ -n "$PASSWORD_HASH_ENV" ]; then
-  PASSWORD_HASH="$PASSWORD_HASH_ENV"
+  PASSWORD_HASH="$(normalize_secret_value "$PASSWORD_HASH_ENV")"
 fi
 
 mkdir -p "${CODEX_HOME:-/data/codex-home}" /workspace
