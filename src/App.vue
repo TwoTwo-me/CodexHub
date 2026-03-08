@@ -245,11 +245,10 @@
                 <ThreadConversation :messages="filteredMessages" :is-loading="isLoadingMessages"
                   :active-thread-id="composerThreadContextId" :scroll-state="selectedThreadScrollState"
                   :live-overlay="liveOverlay"
-                  :pending-requests="selectedThreadServerRequests"
+                  :request-rail-count="selectedThreadServerRequests.length"
                   :is-turn-in-progress="isSelectedThreadInProgress"
                   :is-rolling-back="isRollingBack"
                   @update-scroll-state="onUpdateThreadScrollState"
-                  @respond-server-request="onRespondServerRequest"
                   @rollback="onRollback" />
               </div>
 
@@ -259,13 +258,18 @@
                   @steer="steerQueuedMessage"
                   @delete="removeQueuedMessage"
                 />
+                <ThreadRequestRail
+                  :pending-requests="selectedThreadServerRequests"
+                  :has-queue-above="selectedThreadQueuedMessages.length > 0"
+                  @respond-server-request="onRespondServerRequest"
+                />
                 <ThreadComposer :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
                   :models="availableModelIds"
                   :selected-model="selectedModelId" :selected-reasoning-effort="selectedReasoningEffort"
                   :skills="installedSkills"
                   :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
-                  :has-queue-above="selectedThreadQueuedMessages.length > 0"
+                  :has-queue-above="selectedThreadQueuedMessages.length > 0 || selectedThreadServerRequests.length > 0"
                   @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                   @update:selected-reasoning-effort="onSelectReasoningEffort" @interrupt="onInterruptTurn" />
               </div>
@@ -289,6 +293,7 @@ import ContentHeader from './components/content/ContentHeader.vue'
 import ThreadConversation from './components/content/ThreadConversation.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
+import ThreadRequestRail from './components/content/ThreadRequestRail.vue'
 import CwdPicker from './components/content/CwdPicker.vue'
 import ServerPicker from './components/content/ServerPicker.vue'
 import SkillsHub from './components/content/SkillsHub.vue'
