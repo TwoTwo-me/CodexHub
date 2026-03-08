@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import type { BridgePendingServerRequest, BridgeServerRequestReply } from '../shared/serverRequestBridge.js'
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -26,6 +27,7 @@ export class LocalCodexAppServer {
   private nextId = 1
   private stopping = false
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
+  private readonly pendingServerRequests = new Map<number, BridgePendingServerRequest>()
   private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
 
   constructor(command = 'codex') {
@@ -104,7 +106,8 @@ export class LocalCodexAppServer {
 
     if (typeof message.method === 'string') {
       const record = asRecord(message)
-      if (typeof record?.id === 'number') {
+      if (typeof record?.id === 'number' && Number.isInteger(record.id)) {
+        this.handleServerRequest(record.id, message.method, message.params ?? null)
         return
       }
       for (const listener of this.notificationListeners) {
@@ -114,6 +117,74 @@ export class LocalCodexAppServer {
         })
       }
     }
+  }
+
+  private emitNotification(notification: { method: string; params: unknown }): void {
+    for (const listener of this.notificationListeners) {
+      listener(notification)
+    }
+  }
+
+  private sendServerRequestReply(requestId: number, reply: { result?: unknown; error?: { code: number; message: string } }): void {
+    if (reply.error) {
+      this.sendLine({
+        jsonrpc: '2.0',
+        id: requestId,
+        error: reply.error,
+      })
+      return
+    }
+
+    this.sendLine({
+      jsonrpc: '2.0',
+      id: requestId,
+      result: reply.result ?? {},
+    })
+  }
+
+  private resolvePendingServerRequest(
+    requestId: number,
+    reply: { result?: unknown; error?: { code: number; message: string } },
+  ): void {
+    const pendingRequest = this.pendingServerRequests.get(requestId)
+    if (!pendingRequest) {
+      throw new Error(`No pending server request found for id ${String(requestId)}`)
+    }
+
+    this.pendingServerRequests.delete(requestId)
+    this.sendServerRequestReply(requestId, reply)
+
+    const requestParams = asRecord(pendingRequest.params)
+    const threadId =
+      typeof requestParams?.threadId === 'string' && requestParams.threadId.length > 0
+        ? requestParams.threadId
+        : ''
+
+    this.emitNotification({
+      method: 'server/request/resolved',
+      params: {
+        id: requestId,
+        method: pendingRequest.method,
+        threadId,
+        mode: 'manual',
+        resolvedAtIso: new Date().toISOString(),
+      },
+    })
+  }
+
+  private handleServerRequest(requestId: number, method: string, params: unknown): void {
+    const pendingRequest: BridgePendingServerRequest = {
+      id: requestId,
+      method,
+      params,
+      receivedAtIso: new Date().toISOString(),
+    }
+    this.pendingServerRequests.set(requestId, pendingRequest)
+
+    this.emitNotification({
+      method: 'server/request',
+      params: pendingRequest,
+    })
   }
 
   private async call(method: string, params: unknown): Promise<unknown> {
@@ -164,6 +235,42 @@ export class LocalCodexAppServer {
     }
   }
 
+  async respondToServerRequest(payload: BridgeServerRequestReply): Promise<void> {
+    await this.ensureInitialized()
+
+    const body = asRecord(payload)
+    if (!body) {
+      throw new Error('Invalid response payload: expected object')
+    }
+
+    const id = body.id
+    if (typeof id !== 'number' || !Number.isInteger(id)) {
+      throw new Error('Invalid response payload: "id" must be an integer')
+    }
+
+    const rawError = asRecord(body.error)
+    if (rawError) {
+      const message = typeof rawError.message === 'string' && rawError.message.trim().length > 0
+        ? rawError.message.trim()
+        : 'Server request rejected by client'
+      const code = typeof rawError.code === 'number' && Number.isFinite(rawError.code)
+        ? Math.trunc(rawError.code)
+        : -32000
+      this.resolvePendingServerRequest(id, { error: { code, message } })
+      return
+    }
+
+    if (!('result' in body)) {
+      throw new Error('Invalid response payload: expected "result" or "error"')
+    }
+
+    this.resolvePendingServerRequest(id, { result: body.result })
+  }
+
+  listPendingServerRequests(): BridgePendingServerRequest[] {
+    return Array.from(this.pendingServerRequests.values())
+  }
+
   dispose(): void {
     if (!this.process) return
 
@@ -179,6 +286,7 @@ export class LocalCodexAppServer {
       request.reject(failure)
     }
     this.pending.clear()
+    this.pendingServerRequests.clear()
 
     try {
       proc.stdin.end()

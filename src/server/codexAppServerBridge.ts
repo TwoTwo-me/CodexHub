@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdtemp, readFile, readdir, rm, mkdir, stat } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, readdir, rm, mkdir, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { homedir } from 'node:os'
@@ -29,6 +29,10 @@ import {
   SERVER_FS_LIST_METHOD,
   SERVER_PROJECT_ROOT_SUGGESTION_METHOD,
 } from '../shared/serverFsBridge.js'
+import {
+  SERVER_REQUESTS_PENDING_METHOD,
+  SERVER_REQUESTS_RESPOND_METHOD,
+} from '../shared/serverRequestBridge.js'
 import { normalizeHubAddress } from '../utils/hubAddress.js'
 
 type JsonRpcCall = {
@@ -308,7 +312,7 @@ async function fetchSkillsTree(): Promise<SkillsTreeEntry[]> {
     return skillsTreeCache.entries
   }
 
-  const resp = await ghFetch('https://api.github.com/repos/openclaw/skills/git/trees/main?recursive=1')
+  const resp = await ghFetch(getSkillsHubTreeUrl())
   if (!resp.ok) throw new Error(`GitHub tree API returned ${resp.status}`)
   const data = (await resp.json()) as { tree?: Array<{ path: string; type: string }> }
 
@@ -326,7 +330,7 @@ async function fetchSkillsTree(): Promise<SkillsTreeEntry[]> {
     entries.push({
       name: skillName,
       owner,
-      url: `https://github.com/openclaw/skills/tree/main/skills/${owner}/${skillName}`,
+      url: buildSkillsHubWebUrl(owner, skillName),
     })
   }
 
@@ -341,7 +345,7 @@ async function fetchMetaBatch(entries: SkillsTreeEntry[]): Promise<void> {
   const batch = toFetch.slice(0, 50)
   const results = await Promise.allSettled(
     batch.map(async (e) => {
-      const rawUrl = `https://raw.githubusercontent.com/openclaw/skills/main/skills/${e.owner}/${e.name}/_meta.json`
+      const rawUrl = buildSkillsHubRawUrl(e.owner, e.name, '_meta.json')
       const resp = await fetch(rawUrl)
       if (!resp.ok) return
       const meta = (await resp.json()) as MetaJson
@@ -369,6 +373,35 @@ function buildHubEntry(e: SkillsTreeEntry): SkillHubEntry {
   }
 }
 
+function getSkillsHubTreeUrl(): string {
+  const value = process.env.CODEXUI_SKILLS_HUB_TREE_URL?.trim()
+  return value && value.length > 0
+    ? value
+    : 'https://api.github.com/repos/openclaw/skills/git/trees/main?recursive=1'
+}
+
+function getSkillsHubRawBaseUrl(): string {
+  const value = process.env.CODEXUI_SKILLS_HUB_RAW_BASE_URL?.trim()
+  return value && value.length > 0
+    ? value.replace(/\/+$/u, '')
+    : 'https://raw.githubusercontent.com/openclaw/skills/main'
+}
+
+function getSkillsHubWebBaseUrl(): string {
+  const value = process.env.CODEXUI_SKILLS_HUB_WEB_BASE_URL?.trim()
+  return value && value.length > 0
+    ? value.replace(/\/+$/u, '')
+    : 'https://github.com/openclaw/skills/tree/main'
+}
+
+function buildSkillsHubRawUrl(owner: string, skillName: string, fileName: string): string {
+  return `${getSkillsHubRawBaseUrl()}/skills/${owner}/${skillName}/${fileName}`
+}
+
+function buildSkillsHubWebUrl(owner: string, skillName: string): string {
+  return `${getSkillsHubWebBaseUrl()}/skills/${owner}/${skillName}`
+}
+
 type InstalledSkillInfo = { name: string; path: string; enabled: boolean }
 
 async function scanInstalledSkillsFromDisk(): Promise<Map<string, InstalledSkillInfo>> {
@@ -386,6 +419,52 @@ async function scanInstalledSkillsFromDisk(): Promise<Map<string, InstalledSkill
     }
   } catch {}
   return map
+}
+
+function mergeInstalledSkillsFromPayload(
+  installedMap: Map<string, InstalledSkillInfo>,
+  payload: unknown,
+): void {
+  const result = asRecord(payload) as {
+    data?: Array<{
+      skills?: Array<{ name?: string; path?: string; enabled?: boolean }>
+    }>
+  } | null
+
+  for (const entry of result?.data ?? []) {
+    for (const skill of entry.skills ?? []) {
+      if (!skill.name) continue
+      installedMap.set(skill.name, {
+        name: skill.name,
+        path: skill.path ?? '',
+        enabled: skill.enabled !== false,
+      })
+    }
+  }
+}
+
+async function installSkillFromGitHub(owner: string, name: string, installDest: string): Promise<string> {
+  const repoDir = await mkdtemp(join(tmpdir(), 'codexui-skill-installer-'))
+  const sparsePath = `skills/${owner}/${name}`
+  try {
+    await runCommand('git', [
+      'clone',
+      '--depth', '1',
+      '--filter=blob:none',
+      '--sparse',
+      'https://github.com/openclaw/skills.git',
+      repoDir,
+    ])
+    await runCommand('git', ['sparse-checkout', 'set', sparsePath], { cwd: repoDir })
+    const sourceDir = join(repoDir, 'skills', owner, name)
+    const targetDir = join(installDest, name)
+    await rm(targetDir, { recursive: true, force: true })
+    await mkdir(installDest, { recursive: true })
+    await cp(sourceDir, targetDir, { recursive: true })
+    return targetDir
+  } finally {
+    await rm(repoDir, { recursive: true, force: true }).catch(() => {})
+  }
 }
 
 async function searchSkillsHub(
@@ -3404,8 +3483,34 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'POST' && url.pathname === '/codex-api/server-requests/respond') {
         const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
-        const runtime = requireLocalRuntime(resolved, 'Server request replies')
         const payload = await readJsonBody(req)
+        if (resolved.server.transport === 'relay') {
+          const relayConfig = resolved.server.relay
+          if (!relayConfig) {
+            setJson(res, 503, { error: `Relay server "${resolved.server.id}" is missing relay configuration` })
+            return
+          }
+          try {
+            await relayHub.dispatchRpc(
+              {
+                scopeKey: resolved.scope.cacheKey,
+                serverId: resolved.server.id,
+                agentId: relayConfig.agentId,
+              },
+              SERVER_REQUESTS_RESPOND_METHOD,
+              payload,
+              relayConfig.requestTimeoutMs,
+            )
+            setJson(res, 200, { ok: true })
+            return
+          } catch (error) {
+            if (error instanceof RelayHubError) {
+              throw mapRelayHubErrorToBridgeError(error)
+            }
+            throw error
+          }
+        }
+        const runtime = requireLocalRuntime(resolved, 'Server request replies')
         await runtime.appServer.respondToServerRequest(payload)
         setJson(res, 200, { ok: true })
         return
@@ -3414,7 +3519,30 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'GET' && url.pathname === '/codex-api/server-requests/pending') {
         const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
         if (resolved.server.transport === 'relay') {
-          setJson(res, 200, { data: [] })
+          const relayConfig = resolved.server.relay
+          if (!relayConfig) {
+            setJson(res, 503, { error: `Relay server "${resolved.server.id}" is missing relay configuration` })
+            return
+          }
+          try {
+            const data = await relayHub.dispatchRpc(
+              {
+                scopeKey: resolved.scope.cacheKey,
+                serverId: resolved.server.id,
+                agentId: relayConfig.agentId,
+              },
+              SERVER_REQUESTS_PENDING_METHOD,
+              null,
+              relayConfig.requestTimeoutMs,
+            )
+            setJson(res, 200, { data })
+            return
+          } catch (error) {
+            if (error instanceof RelayHubError) {
+              throw mapRelayHubErrorToBridgeError(error)
+            }
+            throw error
+          }
           return
         }
         const runtime = requireLocalRuntime(resolved, 'Pending server requests')
@@ -3636,23 +3764,46 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'GET' && url.pathname === '/codex-api/skills-hub') {
         try {
           const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
-          const runtime = requireLocalRuntime(resolved, 'Skills hub')
           const q = url.searchParams.get('q') || ''
           const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 200)
           const sort = url.searchParams.get('sort') || 'date'
           const allEntries = await fetchSkillsTree()
 
-          const installedMap = await scanInstalledSkillsFromDisk()
-          try {
-            const result = (await runtime.appServer.rpc('skills/list', {})) as { data?: Array<{ skills?: Array<{ name?: string; path?: string; enabled?: boolean }> }> }
-            for (const entry of result.data ?? []) {
-              for (const skill of entry.skills ?? []) {
-                if (skill.name) {
-                  installedMap.set(skill.name, { name: skill.name, path: skill.path ?? '', enabled: skill.enabled !== false })
-                }
-              }
+          const installedMap = resolved.server.transport === 'relay'
+            ? new Map<string, InstalledSkillInfo>()
+            : await scanInstalledSkillsFromDisk()
+
+          if (resolved.server.transport === 'relay') {
+            const relayConfig = resolved.server.relay
+            if (!relayConfig) {
+              setJson(res, 503, { error: `Relay server "${resolved.server.id}" is missing relay configuration` })
+              return
             }
-          } catch {}
+            try {
+              const result = await relayHub.dispatchRpc(
+                {
+                  scopeKey: resolved.scope.cacheKey,
+                  serverId: resolved.server.id,
+                  agentId: relayConfig.agentId,
+                },
+                'skills/list',
+                {},
+                relayConfig.requestTimeoutMs,
+              )
+              mergeInstalledSkillsFromPayload(installedMap, result)
+            } catch (error) {
+              if (error instanceof RelayHubError) {
+                throw mapRelayHubErrorToBridgeError(error)
+              }
+              throw error
+            }
+          } else {
+            const runtime = requireLocalRuntime(resolved, 'Skills hub')
+            try {
+              const result = await runtime.appServer.rpc('skills/list', {})
+              mergeInstalledSkillsFromPayload(installedMap, result)
+            } catch {}
+          }
 
           const installedHubEntries = allEntries.filter((e) => installedMap.has(e.name))
           await fetchMetaBatch(installedHubEntries)
@@ -3683,7 +3834,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             setJson(res, 400, { error: 'Missing owner or name' })
             return
           }
-          const rawUrl = `https://raw.githubusercontent.com/openclaw/skills/main/skills/${owner}/${name}/SKILL.md`
+          const rawUrl = buildSkillsHubRawUrl(owner, name, 'SKILL.md')
           const resp = await fetch(rawUrl)
           if (!resp.ok) throw new Error(`Failed to fetch SKILL.md: ${resp.status}`)
           const content = await resp.text()
@@ -3698,6 +3849,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         try {
           requireLoopbackForSensitiveMutation(req, 'Skills installation')
           const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+          if (resolved.server.transport === 'relay') {
+            setJson(res, 409, {
+              error: 'Connector-scoped skill installation is not available from the Hub yet. Install the skill directly on the connector host.',
+            })
+            return
+          }
           const runtime = requireLocalRuntime(resolved, 'Skills installation')
           const payload = asRecord(await readJsonBody(req))
           const owner = typeof payload?.owner === 'string' ? payload.owner : ''
@@ -3706,17 +3863,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             setJson(res, 400, { error: 'Missing owner or name' })
             return
           }
-          const installerScript = '/Users/igor/.cursor/skills/.system/skill-installer/scripts/install-skill-from-github.py'
           const installDest = await detectUserSkillsDir(runtime.appServer)
-          const skillPathInRepo = `skills/${owner}/${name}`
-          await runCommand('python3', [
-            installerScript,
-            '--repo', 'openclaw/skills',
-            '--path', skillPathInRepo,
-            '--dest', installDest,
-            '--method', 'git',
-          ])
-          const skillDir = join(installDest, name)
+          const skillDir = await installSkillFromGitHub(owner, name, installDest)
           await ensureInstalledSkillIsValid(runtime.appServer, skillDir)
           setJson(res, 200, { ok: true, path: skillDir })
         } catch (error) {
@@ -3733,6 +3881,12 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         try {
           requireLoopbackForSensitiveMutation(req, 'Skills uninstall')
           const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+          if (resolved.server.transport === 'relay') {
+            setJson(res, 409, {
+              error: 'Connector-scoped skill uninstall is not available from the Hub yet. Remove the skill directly on the connector host.',
+            })
+            return
+          }
           const runtime = requireLocalRuntime(resolved, 'Skills uninstall')
           const payload = asRecord(await readJsonBody(req))
           const name = typeof payload?.name === 'string' ? payload.name : ''
