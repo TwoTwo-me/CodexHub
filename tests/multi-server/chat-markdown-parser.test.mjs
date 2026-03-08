@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { parseChatMarkdown, parseInlineMarkdown } from '../../src/utils/chatMarkdown.ts'
+import { parseChatMarkdown, parseInlineMarkdown } from '../../src/utils/chatMarkdown.js'
 
 test('parseInlineMarkdown supports links, inline code, and file references without HTML', () => {
   const segments = parseInlineMarkdown('See [OpenAI](https://openai.com), `src/index.ts:12`, and `const x = 1`')

@@ -300,7 +300,7 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ThreadScrollState, UiLiveOverlay, UiMessage, UiServerRequest } from '../../types/codex'
-import { parseChatMarkdown } from '../../utils/chatMarkdown'
+import { parseChatMarkdown } from '../../utils/chatMarkdown.js'
 import IconTablerX from '../icons/IconTablerX.vue'
 import IconTablerArrowBackUp from '../icons/IconTablerArrowBackUp.vue'
 
@@ -566,7 +566,7 @@ function toRenderableImageUrl(value: string): string {
   return normalized
 }
 
-function parseRenderableMarkdownBlocks(text: string) {
+function parseRenderableMarkdownBlocks(text: string): ReturnType<typeof parseChatMarkdown> {
   return parseChatMarkdown(text).map((block) => {
     if (block.kind !== 'image') return block
     return {
