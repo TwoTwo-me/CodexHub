@@ -7,4 +7,8 @@ export type { Turn } from '../../documentation/app-server-schemas/typescript/v2/
 export type { UserInput } from '../../documentation/app-server-schemas/typescript/v2/UserInput'
 export type { ModelListResponse } from '../../documentation/app-server-schemas/typescript/v2/ModelListResponse'
 export type { ConfigReadResponse } from '../../documentation/app-server-schemas/typescript/v2/ConfigReadResponse'
+export type { ConfigRequirementsReadResponse } from '../../documentation/app-server-schemas/typescript/v2/ConfigRequirementsReadResponse'
+export type { ConfigWriteResponse } from '../../documentation/app-server-schemas/typescript/v2/ConfigWriteResponse'
+export type { AskForApproval } from '../../documentation/app-server-schemas/typescript/v2/AskForApproval'
+export type { SandboxMode } from '../../documentation/app-server-schemas/typescript/v2/SandboxMode'
 export type { ReasoningEffort } from '../../documentation/app-server-schemas/typescript/ReasoningEffort'

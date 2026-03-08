@@ -229,7 +229,8 @@ test('settings page can enable browser notifications through service worker subs
   await page.goto(`${BASE_URL}/settings`, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(1200)
 
-  await expect(page.getByText('Browser notifications')).toBeVisible()
+  await page.getByRole('tab', { name: 'Browser notifications' }).click()
+  await expect(page.getByRole('heading', { name: 'Browser notifications' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Enable notifications' })).toBeVisible()
   await page.getByRole('button', { name: 'Enable notifications' }).click()
   await expect(page.getByText('Notifications enabled for this browser.')).toBeVisible()

@@ -2,20 +2,36 @@
   <section class="settings-panel">
     <header class="settings-panel-header">
       <div>
-        <p class="settings-panel-eyebrow">Connectors</p>
-        <h2 class="settings-panel-title">Connector control panel</h2>
+        <p class="settings-panel-eyebrow">Settings</p>
+        <h2 class="settings-panel-title">Workspace settings</h2>
         <p class="settings-panel-subtitle">
-          Register outbound connectors for each remote Codex host and manage bootstrap, reinstall, and runtime status from one hub.
+          Organize connector operations, browser notification devices, and server-scoped hook defaults in one place.
         </p>
       </div>
-      <button type="button" class="settings-panel-refresh" :disabled="isLoading" @click="void refreshConnectors()">
-        {{ isLoading ? 'Refreshing…' : 'Refresh' }}
-      </button>
     </header>
 
     <p v-if="errorMessage" class="settings-panel-error">{{ errorMessage }}</p>
 
-    <div class="settings-grid">
+    <div class="settings-tablist" role="tablist" aria-label="Settings sections">
+      <button
+        v-for="tab in settingsTabs"
+        :id="`settings-tab-${tab.id}`"
+        :key="tab.id"
+        type="button"
+        class="settings-tab"
+        role="tab"
+        :aria-selected="activeTab === tab.id"
+        :aria-controls="`settings-panel-${tab.id}`"
+        :data-active="activeTab === tab.id"
+        @click="activeTab = tab.id"
+      >
+        {{ tab.label }}
+      </button>
+    </div>
+
+    <template v-if="activeTab === 'connectors'">
+      <div id="settings-panel-connectors" class="settings-tab-panel" role="tabpanel" aria-labelledby="settings-tab-connectors">
+        <div class="settings-grid">
       <form class="settings-card settings-create-card" @submit.prevent="void createConnector()">
         <div class="settings-card-header">
           <div>
@@ -284,9 +300,54 @@
           Select a connector to inspect status and actions.
         </div>
       </section>
-    </div>
+        </div>
 
-    <section class="settings-card settings-notifications-card">
+        <section v-if="selectedInstallArtifact" class="settings-card settings-install-card">
+          <div class="settings-card-header">
+            <div>
+              <h3 class="settings-card-title">Connector install artifact</h3>
+              <p class="settings-card-subtitle">Reveal the one-time bootstrap token and install command for the selected connector.</p>
+            </div>
+          </div>
+
+          <p class="settings-install-once">Bootstrap token is only shown once.</p>
+
+          <label class="settings-field">
+            <span class="settings-field-label">Bootstrap token</span>
+            <div class="settings-inline-actions settings-inline-actions-tight">
+              <button type="button" class="settings-secondary-button" @click="toggleTokenReveal">
+                {{ isTokenRevealed ? 'Hide token' : 'Reveal token' }}
+              </button>
+            </div>
+            <textarea
+              class="settings-code-block"
+              readonly
+              :value="isTokenRevealed ? selectedInstallArtifact.token : '••••••••••••••••'"
+            ></textarea>
+            <p class="settings-field-help">
+              Save this bootstrap token to a secure file on the connector host. The install step rewrites the same file with the durable credential.
+            </p>
+          </label>
+
+          <label class="settings-field">
+            <span class="settings-field-label">Suggested install command</span>
+            <textarea class="settings-code-block settings-code-block-large" readonly :value="selectedInstallCommand"></textarea>
+            <p class="settings-field-help">
+              Reveal token to embed it directly in the command below. Inline tokens are convenient, but they may be saved in shell history.
+            </p>
+          </label>
+        </section>
+      </div>
+    </template>
+
+    <section
+      v-else-if="activeTab === 'notifications'"
+      id="settings-panel-notifications"
+      class="settings-tab-panel"
+      role="tabpanel"
+      aria-labelledby="settings-tab-notifications"
+    >
+      <section class="settings-card settings-notifications-card">
       <div class="settings-card-header">
         <div>
           <h3 class="settings-card-title">Browser notifications</h3>
@@ -430,47 +491,23 @@
         </div>
       </div>
     </section>
+    </section>
 
-    <section v-if="selectedInstallArtifact" class="settings-card settings-install-card">
-      <div class="settings-card-header">
-        <div>
-          <h3 class="settings-card-title">Connector install artifact</h3>
-          <p class="settings-card-subtitle">Reveal the one-time bootstrap token and install command for the selected connector.</p>
-        </div>
-      </div>
-
-      <p class="settings-install-once">Bootstrap token is only shown once.</p>
-
-      <label class="settings-field">
-        <span class="settings-field-label">Bootstrap token</span>
-        <div class="settings-inline-actions settings-inline-actions-tight">
-          <button type="button" class="settings-secondary-button" @click="toggleTokenReveal">
-            {{ isTokenRevealed ? 'Hide token' : 'Reveal token' }}
-          </button>
-        </div>
-        <textarea
-          class="settings-code-block"
-          readonly
-          :value="isTokenRevealed ? selectedInstallArtifact.token : '••••••••••••••••'"
-        ></textarea>
-        <p class="settings-field-help">
-          Save this bootstrap token to a secure file on the connector host. The install step rewrites the same file with the durable credential.
-        </p>
-      </label>
-
-      <label class="settings-field">
-        <span class="settings-field-label">Suggested install command</span>
-        <textarea class="settings-code-block settings-code-block-large" readonly :value="selectedInstallCommand"></textarea>
-        <p class="settings-field-help">
-          Reveal token to embed it directly in the command below. Inline tokens are convenient, but they may be saved in shell history.
-        </p>
-      </label>
+    <section
+      v-else
+      id="settings-panel-hooks"
+      class="settings-tab-panel"
+      role="tabpanel"
+      aria-labelledby="settings-tab-hooks"
+    >
+      <SettingsHookTab :servers="props.servers" :selected-server-id="props.selectedServerId" />
     </section>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import type { CodexServerInfo } from '../../api/codexGateway'
 import {
   createConnectorRegistration,
   deleteConnectorRegistration,
@@ -493,6 +530,17 @@ import {
   type StoredBrowserSubscription,
 } from '../../api/pwaGateway'
 import { createConnectorInstallCommand } from '../../shared/connectorInstallCommand'
+import SettingsHookTab from './SettingsHookTab.vue'
+
+const SETTINGS_TAB_STORAGE_KEY = 'codex-web-local.settings-tab.v1'
+
+const props = withDefaults(defineProps<{
+  servers?: CodexServerInfo[]
+  selectedServerId?: string
+}>(), {
+  servers: () => [],
+  selectedServerId: '',
+})
 
 const emit = defineEmits<{
   'connectors-changed': []
@@ -503,8 +551,17 @@ type InstallArtifact = {
   token: string
 }
 
+type SettingsTabId = 'connectors' | 'notifications' | 'hooks'
+
+const settingsTabs: Array<{ id: SettingsTabId; label: string }> = [
+  { id: 'connectors', label: 'Connector Control' },
+  { id: 'notifications', label: 'Browser notifications' },
+  { id: 'hooks', label: 'Hook settings' },
+]
+
 const connectors = ref<CodexConnectorInfo[]>([])
 const selectedConnectorId = ref('')
+const activeTab = ref<SettingsTabId>('connectors')
 const isLoading = ref(false)
 const isCreating = ref(false)
 const isRenamingBusy = ref(false)
@@ -774,6 +831,17 @@ function resetCreateForm(): void {
   createForm.name = ''
   createForm.id = ''
   createForm.hubAddress = typeof window !== 'undefined' ? window.location.origin : ''
+}
+
+function loadPersistedTab(): SettingsTabId {
+  if (typeof window === 'undefined') return 'connectors'
+  const raw = window.localStorage.getItem(SETTINGS_TAB_STORAGE_KEY)
+  return settingsTabs.some((tab) => tab.id === raw) ? (raw as SettingsTabId) : 'connectors'
+}
+
+function savePersistedTab(tabId: SettingsTabId): void {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, tabId)
 }
 
 async function refreshConnectors(): Promise<void> {
@@ -1055,12 +1123,17 @@ async function disableNotifications(): Promise<void> {
 }
 
 onMounted(() => {
+  activeTab.value = loadPersistedTab()
   void refreshConnectors()
   void refreshBrowserSubscriptions()
 })
 
 watch(selectedConnectorId, () => {
   void refreshSelectedConnectorJobs()
+})
+
+watch(activeTab, (tabId) => {
+  savePersistedTab(tabId)
 })
 </script>
 
@@ -1085,6 +1158,22 @@ watch(selectedConnectorId, () => {
 
 .settings-panel-subtitle {
   @apply m-0 mt-1 max-w-3xl text-sm leading-6 text-zinc-600;
+}
+
+.settings-tablist {
+  @apply flex flex-wrap gap-2;
+}
+
+.settings-tab {
+  @apply inline-flex items-center justify-center rounded-xl border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-50;
+}
+
+.settings-tab[data-active='true'] {
+  @apply border-zinc-950 bg-zinc-950 text-white;
+}
+
+.settings-tab-panel {
+  @apply flex flex-col gap-4;
 }
 
 .settings-panel-refresh {

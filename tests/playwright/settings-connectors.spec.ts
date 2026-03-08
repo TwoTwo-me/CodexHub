@@ -348,7 +348,7 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
   await page.goto(`${BASE_URL}/settings`, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(1200)
 
-  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
   await expect(page.getByText('Build Runner')).toBeVisible()
   await expect(page.getByText('2 projects')).toBeVisible()
   await expect(page.getByText('4 threads')).toBeVisible()

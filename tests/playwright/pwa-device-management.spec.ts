@@ -275,7 +275,8 @@ test('settings page shows all notification devices and allows alias edits', asyn
   await page.goto(`${BASE_URL}/settings`, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(1200)
 
-  await expect(page.getByText('Browser notifications')).toBeVisible()
+  await page.getByRole('tab', { name: 'Browser notifications' }).click()
+  await expect(page.getByRole('heading', { name: 'Browser notifications' })).toBeVisible()
   await expect(page.locator('.notification-device-name', { hasText: 'Desk Chrome' })).toBeVisible()
   await expect(page.locator('.notification-device-name', { hasText: 'iPhone Safari' })).toBeVisible()
   await expect(page.getByText('Current browser')).toBeVisible()
@@ -298,6 +299,7 @@ test('deleting the current browser device unsubscribes the local push subscripti
   await page.goto(`${BASE_URL}/settings`, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(1200)
 
+  await page.getByRole('tab', { name: 'Browser notifications' }).click()
   await page.getByRole('button', { name: 'Delete device Desk Chrome' }).click()
   await expect(page.getByText('Notifications disabled for this browser.')).toBeVisible()
   await expect(page.getByText('Desk Chrome')).toHaveCount(0)

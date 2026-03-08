@@ -206,7 +206,11 @@
             </section>
           </template>
           <template v-else-if="isSettingsRoute">
-            <SettingsPanel @connectors-changed="onConnectorsChanged" />
+            <SettingsPanel
+              :servers="availableServers"
+              :selected-server-id="selectedServerId"
+              @connectors-changed="onConnectorsChanged"
+            />
           </template>
           <template v-else-if="isHooksRoute">
             <HookInboxPanel :entries="hookInboxEntries" @open-thread="onOpenHookThread" />

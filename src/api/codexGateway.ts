@@ -9,9 +9,13 @@ import {
   type RpcNotification,
 } from './codexRpcClient'
 import type {
+  AskForApproval,
   ConfigReadResponse,
+  ConfigRequirementsReadResponse,
+  ConfigWriteResponse,
   ModelListResponse,
   ReasoningEffort,
+  SandboxMode,
   ThreadListResponse,
   ThreadReadResponse,
 } from './appServerDtos'
@@ -22,6 +26,18 @@ import type { UiMessage, UiProjectGroup } from '../types/codex'
 type CurrentModelConfig = {
   model: string
   reasoningEffort: ReasoningEffort | ''
+}
+
+export type HookSettingsSnapshot = {
+  approvalPolicy: AskForApproval | ''
+  sandboxMode: SandboxMode | ''
+  allowedApprovalPolicies: AskForApproval[]
+  allowedSandboxModes: SandboxMode[]
+  networkSummary: string[]
+  approvalPolicyOrigin?: string
+  sandboxModeOrigin?: string
+  supportsRequirements: boolean
+  canWrite: boolean
 }
 
 export type WorkspaceRootsState = {
@@ -178,16 +194,21 @@ function normalizeServerEntries(payload: unknown): CodexServerDirectory {
 }
 
 function scopedServerOptions(): { serverId?: string; relayE2ee?: { keyId: string; passphrase: string } } {
+  return scopedServerOptionsFor(activeServerId)
+}
+
+function scopedServerOptionsFor(serverId: string): { serverId?: string; relayE2ee?: { keyId: string; passphrase: string } } {
   const options: {
     serverId?: string
     relayE2ee?: { keyId: string; passphrase: string }
   } = {}
 
-  if (activeServerId) {
-    options.serverId = activeServerId
+  const normalizedServerId = serverId.trim()
+  if (normalizedServerId) {
+    options.serverId = normalizedServerId
   }
 
-  const activeServer = activeServerId ? serverInfoById.get(activeServerId) : undefined
+  const activeServer = normalizedServerId ? serverInfoById.get(normalizedServerId) : undefined
   if (activeServer?.relayE2eeKeyId) {
     const passphrase = relayE2eePassphraseByServerId.get(activeServer.id) ?? ''
     if (passphrase.length > 0) {
@@ -237,6 +258,14 @@ export function setRelayE2eePassphrase(serverId: string, passphrase: string): vo
 async function callRpc<T>(method: string, params?: unknown): Promise<T> {
   try {
     return await rpcCall<T>(method, params, scopedServerOptions())
+  } catch (error) {
+    throw normalizeCodexApiError(error, `RPC ${method} failed`, method)
+  }
+}
+
+async function callRpcForServer<T>(serverId: string, method: string, params?: unknown): Promise<T> {
+  try {
+    return await rpcCall<T>(method, params, scopedServerOptionsFor(serverId))
   } catch (error) {
     throw normalizeCodexApiError(error, `RPC ${method} failed`, method)
   }
@@ -454,6 +483,47 @@ export async function getCurrentModelConfig(): Promise<CurrentModelConfig> {
   const model = payload.config.model ?? ''
   const reasoningEffort = normalizeReasoningEffort(payload.config.model_reasoning_effort)
   return { model, reasoningEffort }
+}
+
+export async function getMethodCatalogForServer(serverId: string): Promise<string[]> {
+  return fetchRpcMethodCatalog(scopedServerOptionsFor(serverId))
+}
+
+export async function getAppServerConfig(serverId: string): Promise<ConfigReadResponse> {
+  return callRpcForServer<ConfigReadResponse>(serverId, 'config/read', {})
+}
+
+export async function getAppServerConfigRequirements(serverId: string): Promise<ConfigRequirementsReadResponse> {
+  return callRpcForServer<ConfigRequirementsReadResponse>(serverId, 'configRequirements/read', {})
+}
+
+export async function writeAppServerConfig(serverId: string, input: {
+  approvalPolicy?: AskForApproval | ''
+  sandboxMode?: SandboxMode | ''
+  writeMethod?: 'config/batchWrite' | 'config/value/write'
+}): Promise<ConfigWriteResponse | null> {
+  const edits = [
+    ...(input.approvalPolicy
+      ? [{ keyPath: 'approval_policy', value: input.approvalPolicy, mergeStrategy: 'replace' as const }]
+      : []),
+    ...(input.sandboxMode
+      ? [{ keyPath: 'sandbox_mode', value: input.sandboxMode, mergeStrategy: 'replace' as const }]
+      : []),
+  ]
+
+  if (edits.length === 0) {
+    return null
+  }
+
+  if (input.writeMethod === 'config/value/write') {
+    let lastResult: ConfigWriteResponse | null = null
+    for (const edit of edits) {
+      lastResult = await callRpcForServer<ConfigWriteResponse>(serverId, 'config/value/write', edit)
+    }
+    return lastResult
+  }
+
+  return callRpcForServer<ConfigWriteResponse>(serverId, 'config/batchWrite', { edits })
 }
 
 function normalizeWorkspaceRootsState(payload: unknown): WorkspaceRootsState {
