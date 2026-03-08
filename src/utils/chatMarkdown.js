@@ -1,5 +1,5 @@
-/** @typedef {{ kind: 'text', value: string } | { kind: 'code', value: string } | { kind: 'file', value: string, displayName: string } | { kind: 'link', label: string, href: string }} MarkdownInlineSegment */
-/** @typedef {{ kind: 'paragraph', segments: MarkdownInlineSegment[] } | { kind: 'heading', level: number, segments: MarkdownInlineSegment[] } | { kind: 'blockquote', lines: MarkdownInlineSegment[][] } | { kind: 'list', ordered: boolean, items: MarkdownInlineSegment[][] } | { kind: 'code', language: string, value: string } | { kind: 'image', url: string, alt: string, markdown: string }} MarkdownBlock */
+/** @typedef {{ kind: 'text', value: string } | { kind: 'code', value: string } | { kind: 'file', value: string, displayName: string } | { kind: 'link', label: string, href: string } | { kind: 'strong', value: string } | { kind: 'em', value: string } | { kind: 'strike', value: string }} MarkdownInlineSegment */
+/** @typedef {{ kind: 'paragraph', segments: MarkdownInlineSegment[] } | { kind: 'heading', level: number, segments: MarkdownInlineSegment[] } | { kind: 'blockquote', lines: MarkdownInlineSegment[][] } | { kind: 'list', ordered: boolean, items: Array<{ segments: MarkdownInlineSegment[], checked: boolean | null }> } | { kind: 'table', header: MarkdownInlineSegment[][], rows: MarkdownInlineSegment[][][] } | { kind: 'hr' } | { kind: 'code', language: string, value: string } | { kind: 'image', url: string, alt: string, markdown: string }} MarkdownBlock */
 
 function isFilePath(value) {
   if (!value || /\s/u.test(value)) return false
@@ -43,6 +43,12 @@ function isLinkTarget(value) {
   return /^(https?:\/\/|mailto:)/u.test(value)
 }
 
+function trimTrailingPunctuation(value) {
+  const match = value.match(/^(.*?)([.,!?;:)]*)$/u)
+  if (!match) return { core: value, trailing: '' }
+  return { core: match[1], trailing: match[2] }
+}
+
 /** @returns {MarkdownInlineSegment[]} */
 export function parseInlineMarkdown(text) {
   if (!text) return []
@@ -61,13 +67,42 @@ export function parseInlineMarkdown(text) {
   }
 
   while (cursor < text.length) {
-    if (text[cursor] === '`') {
+    const remaining = text.slice(cursor)
+
+    if (remaining.startsWith('**')) {
+      const closing = remaining.indexOf('**', 2)
+      if (closing > 2) {
+        segments.push({ kind: 'strong', value: remaining.slice(2, closing) })
+        cursor += closing + 2
+        continue
+      }
+    }
+
+    if (remaining.startsWith('~~')) {
+      const closing = remaining.indexOf('~~', 2)
+      if (closing > 2) {
+        segments.push({ kind: 'strike', value: remaining.slice(2, closing) })
+        cursor += closing + 2
+        continue
+      }
+    }
+
+    if (remaining.startsWith('*') && !remaining.startsWith('**')) {
+      const closing = remaining.indexOf('*', 1)
+      if (closing > 1) {
+        segments.push({ kind: 'em', value: remaining.slice(1, closing) })
+        cursor += closing + 1
+        continue
+      }
+    }
+
+    if (remaining[0] === '`') {
       let openLength = 1
-      while (cursor + openLength < text.length && text[cursor + openLength] === '`') openLength += 1
+      while (remaining[openLength] === '`') openLength += 1
       const delimiter = '`'.repeat(openLength)
-      const closing = text.indexOf(delimiter, cursor + openLength)
-      if (closing > cursor + openLength && !text.slice(cursor + openLength, closing).includes('\n')) {
-        const token = text.slice(cursor + openLength, closing)
+      const closing = remaining.indexOf(delimiter, openLength)
+      if (closing > openLength && !remaining.slice(openLength, closing).includes('\n')) {
+        const token = remaining.slice(openLength, closing)
         const fileReference = parseFileReference(token)
         if (fileReference) {
           const basename = getBasename(fileReference.path)
@@ -79,31 +114,52 @@ export function parseInlineMarkdown(text) {
         } else {
           segments.push({ kind: 'code', value: token })
         }
-        cursor = closing + openLength
+        cursor += closing + openLength
         continue
       }
     }
 
-    if (text[cursor] === '[') {
-      const closingBracket = text.indexOf(']', cursor + 1)
-      const openParen = closingBracket >= 0 ? text.indexOf('(', closingBracket + 1) : -1
-      const closingParen = openParen >= 0 ? text.indexOf(')', openParen + 1) : -1
-      if (closingBracket > cursor + 1 && openParen === closingBracket + 1 && closingParen > openParen + 1) {
-        const label = text.slice(cursor + 1, closingBracket)
-        const href = text.slice(openParen + 1, closingParen).trim()
+    if (remaining[0] === '[') {
+      const closingBracket = remaining.indexOf(']')
+      const openParen = closingBracket >= 0 ? remaining.indexOf('(', closingBracket + 1) : -1
+      const closingParen = openParen >= 0 ? remaining.indexOf(')', openParen + 1) : -1
+      if (closingBracket > 0 && openParen === closingBracket + 1 && closingParen > openParen + 1) {
+        const label = remaining.slice(1, closingBracket)
+        const href = remaining.slice(openParen + 1, closingParen).trim()
         if (isLinkTarget(href)) {
           segments.push({ kind: 'link', label, href })
-          cursor = closingParen + 1
+          cursor += closingParen + 1
           continue
         }
       }
     }
 
-    pushText(text[cursor])
+    const autoLinkMatch = remaining.match(/^(https?:\/\/[^\s<]+|mailto:[^\s<]+)/u)
+    if (autoLinkMatch) {
+      const { core, trailing } = trimTrailingPunctuation(autoLinkMatch[1])
+      segments.push({ kind: 'link', label: core, href: core })
+      if (trailing) pushText(trailing)
+      cursor += autoLinkMatch[1].length
+      continue
+    }
+
+    pushText(remaining[0])
     cursor += 1
   }
 
   return segments.length > 0 ? segments : [{ kind: 'text', value: text }]
+}
+
+function isTableCandidate(line) {
+  return line.includes('|')
+}
+
+function isTableSeparator(line) {
+  return /^\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?$/u.test(line.trim())
+}
+
+function splitTableRow(line) {
+  return line.trim().replace(/^\|/u, '').replace(/\|$/u, '').split('|').map((cell) => cell.trim())
 }
 
 function isBlockBoundary(line) {
@@ -115,6 +171,8 @@ function isBlockBoundary(line) {
     || /^[-*+]\s+/u.test(trimmed)
     || /^\d+\.\s+/u.test(trimmed)
     || /^!\[[^\]]*\]\(([^)\n]+)\)$/u.test(trimmed)
+    || /^([-*_])(?:\s*\1){2,}\s*$/u.test(trimmed)
+    || isTableCandidate(trimmed)
 }
 
 /** @returns {MarkdownBlock[]} */
@@ -144,6 +202,24 @@ export function parseChatMarkdown(text) {
     if (imageMatch) {
       blocks.push({ kind: 'image', alt: imageMatch[1].trim(), url: imageMatch[2].trim(), markdown: trimmed })
       index += 1
+      continue
+    }
+
+    if (/^([-*_])(?:\s*\1){2,}\s*$/u.test(trimmed)) {
+      blocks.push({ kind: 'hr' })
+      index += 1
+      continue
+    }
+
+    if (isTableCandidate(trimmed) && index + 1 < lines.length && isTableSeparator(lines[index + 1])) {
+      const header = splitTableRow(lines[index]).map((cell) => parseInlineMarkdown(cell))
+      const rows = []
+      index += 2
+      while (index < lines.length && lines[index].trim().includes('|')) {
+        rows.push(splitTableRow(lines[index]).map((cell) => parseInlineMarkdown(cell)))
+        index += 1
+      }
+      blocks.push({ kind: 'table', header, rows })
       continue
     }
 
@@ -183,10 +259,16 @@ export function parseChatMarkdown(text) {
       const items = []
       while (index < lines.length) {
         const current = lines[index].trim()
+        const taskMatch = !ordered ? current.match(/^[-*+]\s+\[( |x|X)\]\s+(.*)$/u) : null
+        if (taskMatch) {
+          items.push({ segments: parseInlineMarkdown(taskMatch[2].trim()), checked: taskMatch[1].toLowerCase() === 'x' })
+          index += 1
+          continue
+        }
         const bulletPattern = ordered ? /^\d+\.\s+(.*)$/u : /^[-*+]\s+(.*)$/u
         const match = current.match(bulletPattern)
         if (!match) break
-        items.push(parseInlineMarkdown(match[1].trim()))
+        items.push({ segments: parseInlineMarkdown(match[1].trim()), checked: null })
         index += 1
       }
       blocks.push({ kind: 'list', ordered, items })
