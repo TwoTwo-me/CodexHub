@@ -75,7 +75,7 @@ test.beforeEach(async ({ page }) => {
   })
 
   await page.route('**/codex-api/server-requests/pending**', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [{ id: 301, method: 'item/commandExecution/requestApproval', params: { threadId: 'thread-long', command: 'hostname', reason: 'Check host identity', availableDecisions: ['accept', 'decline'] }, receivedAtIso: '2026-03-08T12:00:00.000Z' }] }) })
   })
 
   await page.route('**/codex-api/meta/methods', async (route) => {
@@ -189,6 +189,8 @@ test('opening a thread jumps to the latest message instead of restoring an old s
 
   const distanceFromBottom = metrics.scrollHeight - (metrics.scrollTop + metrics.clientHeight)
   expect(distanceFromBottom).toBeLessThanOrEqual(32)
+  await expect(page.locator('.composer-with-queue > .thread-request-rail')).toBeVisible()
+  await expect(page.locator('.conversation-list .request-card')).toHaveCount(0)
 
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/thread-open-scroll-bottom-desktop.png`,
