@@ -1,8 +1,8 @@
 <template>
   <div class="skills-hub">
     <div class="skills-hub-header">
-      <h2 class="skills-hub-title">Skills Hub</h2>
-      <p class="skills-hub-subtitle">Browse and discover skills from the OpenClaw community</p>
+      <h2 class="skills-hub-title">Skill Manager</h2>
+      <p class="skills-hub-subtitle">Install curated OpenAI skills or community Skills Hub packages on the selected server.</p>
     </div>
 
     <div class="skills-hub-server">
@@ -14,15 +14,29 @@
       />
     </div>
 
+    <div class="skills-hub-tabs" role="tablist" aria-label="Skill sources">
+      <button
+        v-for="source in skillSources"
+        :key="source.id"
+        type="button"
+        class="skills-hub-tab"
+        :class="{ 'is-active': activeSource === source.id }"
+        role="tab"
+        :aria-selected="activeSource === source.id"
+        @click="selectSource(source.id)"
+      >
+        {{ source.label }}
+      </button>
+    </div>
+
     <div class="skills-hub-toolbar">
       <div class="skills-hub-search-wrap">
         <IconTablerSearch class="skills-hub-search-icon" />
         <input
-          ref="searchRef"
           v-model="query"
           class="skills-hub-search"
           type="text"
-          placeholder="Search skills... (e.g. flight, docker, react)"
+          :placeholder="`Search ${activeSourceLabel.toLowerCase()}...`"
           @input="onSearchInput"
         />
         <span v-if="totalCount > 0" class="skills-hub-count">{{ totalCount }} skills</span>
@@ -36,15 +50,15 @@
 
     <div v-if="filteredInstalled.length > 0" class="skills-hub-section">
       <button class="skills-hub-section-toggle" type="button" @click="isInstalledOpen = !isInstalledOpen">
-        <span class="skills-hub-section-title">Installed ({{ filteredInstalled.length }})</span>
+        <span class="skills-hub-section-title">Installed in {{ activeSourceLabel }} ({{ filteredInstalled.length }})</span>
         <IconTablerChevronRight class="skills-hub-section-chevron" :class="{ 'is-open': isInstalledOpen }" />
       </button>
       <div v-if="isInstalledOpen" class="skills-hub-grid">
         <SkillCard
           v-for="skill in filteredInstalled"
-          :key="skill.name"
+          :key="skillKey(skill)"
           :skill="skill"
-          @select="(skill) => openDetail(skill as HubSkill)"
+          @select="(selected) => openDetail(selected as HubSkill)"
         />
       </div>
     </div>
@@ -56,12 +70,13 @@
         <div v-if="browseSkills.length > 0" class="skills-hub-grid">
           <SkillCard
             v-for="skill in browseSkills"
-            :key="skill.url"
+            :key="skillKey(skill)"
             :skill="skill"
-            @select="(skill) => openDetail(skill as HubSkill)"
+            @select="(selected) => openDetail(selected as HubSkill)"
           />
         </div>
-        <div v-else-if="query.trim()" class="skills-hub-empty">No skills found for "{{ query }}"</div>
+        <div v-else-if="query.trim()" class="skills-hub-empty">No skills found for "{{ query }}" in {{ activeSourceLabel }}.</div>
+        <div v-else class="skills-hub-empty">No skills available from {{ activeSourceLabel }} for this server.</div>
       </template>
     </div>
 
@@ -86,14 +101,24 @@ import {
   uninstallSkillFromHub,
   type SkillsHubEntry,
 } from '../../api/codexGateway'
+import { SKILL_SOURCE_IDS, getSkillSourceLabel, type SkillSourceId } from '../../shared/skillSources.js'
 import IconTablerSearch from '../icons/IconTablerSearch.vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import ServerPicker from './ServerPicker.vue'
 import SkillCard from './SkillCard.vue'
 import SkillDetailModal, { type HubSkill } from './SkillDetailModal.vue'
 
-const EMPTY_SKILL: HubSkill = { name: '', owner: '', description: '', url: '', installed: false }
-const SKILLS_HUB_CACHE_KEY = 'codex-web-local.skills-hub.cache.v1'
+const EMPTY_SKILL: HubSkill = {
+  source: 'openai',
+  sourceLabel: getSkillSourceLabel('openai'),
+  skillId: '',
+  name: '',
+  owner: '',
+  description: '',
+  url: '',
+  installed: false,
+}
+const SKILLS_HUB_CACHE_KEY = 'codex-web-local.skill-manager.cache.v1'
 type SkillsHubPayload = { data: HubSkill[]; installed?: HubSkill[]; total: number }
 
 const props = withDefaults(defineProps<{
@@ -104,9 +129,9 @@ const props = withDefaults(defineProps<{
   servers: () => [],
 })
 
-const searchRef = ref<HTMLInputElement | null>(null)
 const query = ref('')
 const sortMode = ref<'date' | 'name'>('date')
+const activeSource = ref<SkillSourceId>('openai')
 const browseSkills = ref<HubSkill[]>([])
 const installedSkills = ref<HubSkill[]>([])
 const totalCount = ref(0)
@@ -127,24 +152,29 @@ const emit = defineEmits<{
   'skills-changed': []
 }>()
 
+const skillSources = SKILL_SOURCE_IDS.map((source) => ({ id: source, label: getSkillSourceLabel(source) }))
+const activeSourceLabel = computed(() => getSkillSourceLabel(activeSource.value))
 const sortLabel = computed(() => sortMode.value === 'date' ? 'Newest' : 'A-Z')
 const toastClass = computed(() => toast.value?.type === 'error' ? 'skills-hub-toast-error' : 'skills-hub-toast-success')
-const currentDetailSkillKey = computed(() => `${detailSkill.value.owner}/${detailSkill.value.name}`)
-const isDetailInstalling = computed(() =>
-  isInstallActionInFlight.value && actionSkillKey.value === currentDetailSkillKey.value,
-)
-const isDetailUninstalling = computed(() =>
-  isUninstallActionInFlight.value && actionSkillKey.value === currentDetailSkillKey.value,
-)
+const currentDetailSkillKey = computed(() => skillKey(detailSkill.value))
+const isDetailInstalling = computed(() => isInstallActionInFlight.value && actionSkillKey.value === currentDetailSkillKey.value)
+const isDetailUninstalling = computed(() => isUninstallActionInFlight.value && actionSkillKey.value === currentDetailSkillKey.value)
 const filteredInstalled = computed(() => {
   const q = query.value.toLowerCase().trim()
-  if (!q) return installedSkills.value
-  return installedSkills.value.filter((s) =>
-    s.name.toLowerCase().includes(q) ||
-    s.owner.toLowerCase().includes(q) ||
-    (s.displayName ?? '').toLowerCase().includes(q),
+  const scoped = installedSkills.value.filter((skill) => skill.source === activeSource.value)
+  if (!q) return scoped
+  return scoped.filter((skill) =>
+    skill.name.toLowerCase().includes(q)
+    || skill.owner.toLowerCase().includes(q)
+    || skill.skillId.toLowerCase().includes(q)
+    || (skill.displayName ?? '').toLowerCase().includes(q)
+    || skill.sourceLabel.toLowerCase().includes(q),
   )
 })
+
+function skillKey(skill: Pick<HubSkill, 'source' | 'skillId'>): string {
+  return `${skill.source}:${skill.skillId}`
+}
 
 function showToast(text: string, type: 'success' | 'error' = 'success'): void {
   toast.value = { text, type }
@@ -158,7 +188,7 @@ function toggleSort(): void {
 }
 
 function cacheKey(q: string): string {
-  return `${props.serverId || 'default'}::${sortMode.value}::${q.trim().toLowerCase()}`
+  return `${props.serverId || 'default'}::${activeSource.value}::${sortMode.value}::${q.trim().toLowerCase()}`
 }
 
 function readCache(key: string): SkillsHubPayload | null {
@@ -198,21 +228,24 @@ function clearCache(): void {
 function applySkillsPayload(payload: SkillsHubPayload): void {
   const inst = payload.installed ?? []
   installedSkills.value = inst
-  const installedNames = new Set(inst.map((s) => s.name))
+  const installedKeys = new Set(inst.map((skill) => skillKey(skill)))
   browseSkills.value = payload.data
-    .map((s) => {
-      if (s.installed || installedNames.has(s.name)) {
-        const local = inst.find((i) => i.name === s.name)
-        return { ...s, installed: true, path: local?.path ?? s.path, enabled: local?.enabled ?? s.enabled }
+    .map((skill) => {
+      if (skill.installed || installedKeys.has(skillKey(skill))) {
+        const local = inst.find((entry) => skillKey(entry) === skillKey(skill))
+        return { ...skill, installed: true, path: local?.path ?? skill.path, enabled: local?.enabled ?? skill.enabled }
       }
-      return s
+      return skill
     })
-    .filter((s) => !s.installed)
+    .filter((skill) => !skill.installed)
   totalCount.value = payload.total
 }
 
 function toHubSkill(skill: SkillsHubEntry): HubSkill {
   return {
+    source: skill.source,
+    sourceLabel: skill.sourceLabel,
+    skillId: skill.skillId,
     name: skill.name,
     owner: skill.owner,
     description: skill.description,
@@ -236,6 +269,7 @@ async function fetchSkills(q: string): Promise<void> {
   error.value = ''
   try {
     const payload = await getSkillsHubPayload({
+      source: activeSource.value,
       query: q.trim(),
       limit: 100,
       sort: sortMode.value,
@@ -268,19 +302,30 @@ function onSelectServer(serverId: string): void {
   emit('select-server', serverId)
 }
 
+function selectSource(source: SkillSourceId): void {
+  if (activeSource.value === source) return
+  activeSource.value = source
+  query.value = ''
+  error.value = ''
+  isDetailOpen.value = false
+  void fetchSkills('')
+}
+
 async function handleInstall(skill: HubSkill): Promise<void> {
-  actionSkillKey.value = `${skill.owner}/${skill.name}`
+  actionSkillKey.value = skillKey(skill)
   isInstallActionInFlight.value = true
   try {
-    const data = await installSkillFromHub(skill.owner, skill.name)
+    const data = await installSkillFromHub({
+      source: skill.source,
+      skillId: skill.skillId,
+      owner: skill.owner,
+      name: skill.name,
+    })
     if (!data.ok) throw new Error('Install failed')
-    const installed = { ...skill, installed: true, path: data.path, enabled: true }
-    installedSkills.value = [...installedSkills.value, installed]
-    browseSkills.value = browseSkills.value.filter((s) => s.name !== skill.name)
-    detailSkill.value = installed
-    showToast(`${skill.displayName || skill.name} skill installed`)
+    showToast(`${skill.displayName || skill.name} installed from ${skill.sourceLabel}`)
     isDetailOpen.value = false
     clearCache()
+    await fetchSkills(query.value)
     emit('skills-changed')
   } catch (e) {
     showToast(e instanceof Error ? e.message : 'Failed to install skill', 'error')
@@ -290,18 +335,21 @@ async function handleInstall(skill: HubSkill): Promise<void> {
 }
 
 async function handleUninstall(skill: HubSkill): Promise<void> {
-  actionSkillKey.value = `${skill.owner}/${skill.name}`
+  actionSkillKey.value = skillKey(skill)
   isUninstallActionInFlight.value = true
   try {
-    const data = await uninstallSkillFromHub(skill.name, skill.path)
+    const data = await uninstallSkillFromHub({
+      source: skill.source,
+      skillId: skill.skillId,
+      owner: skill.owner,
+      name: skill.name,
+      path: skill.path,
+    })
     if (!data.ok) throw new Error('Uninstall failed')
-    installedSkills.value = installedSkills.value.filter((s) => s.name !== skill.name)
-    if (skill.owner !== 'local') {
-      browseSkills.value = [...browseSkills.value, { ...skill, installed: false, path: undefined, enabled: undefined }]
-    }
-    showToast(`${skill.displayName || skill.name} skill uninstalled`)
+    showToast(`${skill.displayName || skill.name} removed from ${skill.sourceLabel}`)
     isDetailOpen.value = false
     clearCache()
+    await fetchSkills(query.value)
     emit('skills-changed')
   } catch (e) {
     showToast(e instanceof Error ? e.message : 'Failed to uninstall skill', 'error')
@@ -323,7 +371,7 @@ async function handleToggleEnabled(skill: HubSkill, enabled: boolean): Promise<v
       body: JSON.stringify({ method: 'skills/config/write', params: { path: skill.path, enabled } }),
     })
     if (!resp.ok) throw new Error('Failed to update skill')
-    showToast(`${skill.displayName || skill.name} skill ${enabled ? 'enabled' : 'disabled'}`)
+    showToast(`${skill.displayName || skill.name} ${enabled ? 'enabled' : 'disabled'}`)
     await fetchSkills(query.value)
   } catch (e) {
     showToast(e instanceof Error ? e.message : 'Failed to update skill', 'error')
@@ -363,6 +411,18 @@ watch(() => props.serverId, () => {
 
 .skills-hub-subtitle {
   @apply text-sm text-zinc-500 m-0;
+}
+
+.skills-hub-tabs {
+  @apply flex flex-wrap items-center gap-2;
+}
+
+.skills-hub-tab {
+  @apply rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-600 transition hover:border-zinc-300 hover:bg-zinc-50;
+}
+
+.skills-hub-tab.is-active {
+  @apply border-zinc-900 bg-zinc-950 text-white hover:border-zinc-900 hover:bg-zinc-900;
 }
 
 .skills-hub-toolbar {
@@ -422,18 +482,15 @@ watch(() => props.serverId, () => {
 }
 
 .skills-hub-grid {
-  @apply grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3;
+  @apply grid grid-cols-1 sm:grid-cols-2 gap-3;
 }
 
-.skills-hub-loading {
-  @apply text-sm text-zinc-400 py-8 text-center;
+.skills-hub-loading,
+.skills-hub-empty {
+  @apply text-sm text-zinc-500 py-6;
 }
 
 .skills-hub-error {
-  @apply text-sm text-rose-600 py-4 text-center rounded-lg border border-rose-200 bg-rose-50;
-}
-
-.skills-hub-empty {
-  @apply text-sm text-zinc-400 py-8 text-center;
+  @apply rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700;
 }
 </style>

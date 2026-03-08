@@ -16,7 +16,7 @@
                 <h3 class="sdm-title">{{ skill.displayName || skill.name }}</h3>
                 <span v-if="skill.installed && !effectiveEnabled" class="sdm-badge-disabled">Disabled</span>
               </div>
-              <span class="sdm-owner">{{ skill.owner }}</span>
+              <span class="sdm-owner">{{ skill.owner }} · {{ skill.sourceLabel }}</span>
             </div>
           </div>
           <button class="sdm-close" type="button" aria-label="Close" @click="$emit('close')">
@@ -73,9 +73,13 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { getSkillReadme } from '../../api/codexGateway'
+import type { SkillSourceId } from '../../shared/skillSources.js'
 import IconTablerX from '../icons/IconTablerX.vue'
 
 export type HubSkill = {
+  source: SkillSourceId
+  sourceLabel: string
+  skillId: string
   name: string
   owner: string
   description: string
@@ -134,11 +138,11 @@ function simpleMarkdown(md: string): string {
 }
 
 async function fetchReadme(): Promise<void> {
-  if (!props.skill.owner || !props.skill.name) return
+  if (!props.skill.source || !props.skill.skillId) return
   isLoadingReadme.value = true
   readmeContent.value = ''
   try {
-    readmeContent.value = await getSkillReadme(props.skill.owner, props.skill.name)
+    readmeContent.value = await getSkillReadme(props.skill.source, props.skill.skillId, props.skill.owner, props.skill.name)
   } catch {
     // silently fail
   } finally {

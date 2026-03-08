@@ -22,6 +22,7 @@ import type {
 import { normalizeCodexApiError } from './codexErrors'
 import { normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from './normalizers/v2'
 import type { UiMessage, UiProjectGroup } from '../types/codex'
+import type { SkillSourceId } from '../shared/skillSources.js'
 
 type CurrentModelConfig = {
   model: string
@@ -708,6 +709,9 @@ export type ComposerFileSuggestion = {
 }
 
 export type SkillsHubEntry = {
+  source: SkillSourceId
+  sourceLabel: string
+  skillId: string
   name: string
   owner: string
   description: string
@@ -771,10 +775,13 @@ function normalizeSkillsHubEntry(payload: unknown): SkillsHubEntry | null {
   const record = asRecord(payload)
   if (!record) return null
 
+  const source = readString(record.source) as SkillSourceId
+  const sourceLabel = readString(record.sourceLabel)
+  const skillId = readString(record.skillId)
   const name = readString(record.name)
   const owner = readString(record.owner)
   const url = readString(record.url)
-  if (!name || !owner || !url) return null
+  if (!source || !sourceLabel || !skillId || !name || !owner || !url) return null
 
   const description = readString(record.description)
   const displayName = readString(record.displayName) || undefined
@@ -785,6 +792,9 @@ function normalizeSkillsHubEntry(payload: unknown): SkillsHubEntry | null {
     : undefined
 
   return {
+    source,
+    sourceLabel,
+    skillId,
     name,
     owner,
     description,
@@ -814,11 +824,13 @@ function normalizeSkillsHubPayload(payload: unknown): SkillsHubPayload {
 }
 
 export async function getSkillsHubPayload(options: {
+  source?: SkillSourceId
   query?: string
   sort?: 'date' | 'name'
   limit?: number
 } = {}): Promise<SkillsHubPayload> {
   const params = new URLSearchParams()
+  params.set('source', options.source ?? 'community')
   if (options.query?.trim()) {
     params.set('q', options.query.trim())
   }
@@ -834,8 +846,10 @@ export async function getSkillsHubPayload(options: {
   return normalizeSkillsHubPayload(envelope)
 }
 
-export async function getSkillReadme(owner: string, name: string): Promise<string> {
-  const params = new URLSearchParams({ owner, name })
+export async function getSkillReadme(source: SkillSourceId, skillId: string, owner = '', name = ''): Promise<string> {
+  const params = new URLSearchParams({ source, skillId })
+  if (owner.trim()) params.set('owner', owner.trim())
+  if (name.trim()) params.set('name', name.trim())
   const response = await fetch(buildServerScopedPath(`/codex-api/skills-hub/readme?${params.toString()}`))
   const payload = (await response.json()) as unknown
   if (!response.ok) {
@@ -845,11 +859,11 @@ export async function getSkillReadme(owner: string, name: string): Promise<strin
   return readString(envelope?.content)
 }
 
-export async function installSkillFromHub(owner: string, name: string): Promise<{ ok: boolean; path?: string }> {
+export async function installSkillFromHub(input: { source: SkillSourceId; skillId: string; owner?: string; name: string }): Promise<{ ok: boolean; path?: string }> {
   const response = await fetch(buildServerScopedPath('/codex-api/skills-hub/install'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ owner, name }),
+    body: JSON.stringify({ source: input.source, skillId: input.skillId, owner: input.owner ?? '', name: input.name }),
   })
   const payload = (await response.json()) as unknown
   if (!response.ok) {
@@ -863,13 +877,16 @@ export async function installSkillFromHub(owner: string, name: string): Promise<
   }
 }
 
-export async function uninstallSkillFromHub(name: string, path?: string): Promise<{ ok: boolean }> {
+export async function uninstallSkillFromHub(input: { source: SkillSourceId; skillId: string; owner?: string; name?: string; path?: string }): Promise<{ ok: boolean }> {
   const response = await fetch(buildServerScopedPath('/codex-api/skills-hub/uninstall'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      name,
-      ...(path?.trim() ? { path: path.trim() } : {}),
+      source: input.source,
+      skillId: input.skillId,
+      ...(input.owner?.trim() ? { owner: input.owner.trim() } : {}),
+      ...(input.name?.trim() ? { name: input.name.trim() } : {}),
+      ...(input.path?.trim() ? { path: input.path.trim() } : {}),
     }),
   })
   const payload = (await response.json()) as unknown

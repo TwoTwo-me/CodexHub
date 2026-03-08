@@ -73,7 +73,7 @@
           type="button"
           @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
         >
-          Skills Hub
+          Skill Manager
         </button>
 
         <button

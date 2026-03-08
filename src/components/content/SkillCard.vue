@@ -21,7 +21,10 @@
           <span v-if="skill.installed && skill.enabled === false" class="skill-card-badge-disabled">Disabled</span>
           <span v-else-if="skill.installed" class="skill-card-badge">Installed</span>
         </div>
-        <span class="skill-card-owner">{{ skill.owner }}</span>
+        <div class="skill-card-meta-row">
+          <span class="skill-card-owner">{{ skill.owner }}</span>
+          <span class="skill-card-source">{{ skill.sourceLabel }}</span>
+        </div>
       </div>
     </div>
     <p v-if="skill.description" class="skill-card-desc">{{ skill.description }}</p>
@@ -34,6 +37,9 @@ import { computed } from 'vue'
 
 const props = defineProps<{
   skill: {
+    source: string
+    sourceLabel: string
+    skillId: string
     name: string
     owner: string
     description: string
@@ -60,8 +66,8 @@ const publishedLabel = computed(() => {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 })
 
-function onAvatarError(e: Event): void {
-  const img = e.target as HTMLImageElement
+function onAvatarError(event: Event): void {
+  const img = event.target as HTMLImageElement
   img.style.display = 'none'
 }
 </script>
@@ -94,11 +100,15 @@ function onAvatarError(e: Event): void {
 }
 
 .skill-card-header {
-  @apply flex items-center gap-2;
+  @apply flex items-center gap-2 flex-wrap;
 }
 
 .skill-card-name {
   @apply text-sm font-medium text-zinc-900 truncate;
+}
+
+.skill-card-meta-row {
+  @apply flex flex-wrap items-center gap-2;
 }
 
 .skill-card-badge {
@@ -111,6 +121,10 @@ function onAvatarError(e: Event): void {
 
 .skill-card-owner {
   @apply text-xs text-zinc-400;
+}
+
+.skill-card-source {
+  @apply inline-flex rounded-md border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500;
 }
 
 .skill-card-desc {

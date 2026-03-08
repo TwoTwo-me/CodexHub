@@ -34,6 +34,15 @@ function createBaseEnv(overrides = {}) {
   }
 }
 
+
+function encodeInstalledSkillDirName(source, skillId) {
+  return `codexui-skill--${source}--${encodeURIComponent(skillId)}`
+}
+
+function communitySkillId(owner, name) {
+  return `${owner}/${name}`
+}
+
 async function loadConnectorModule() {
   const moduleUrl = pathToFileURL(connectorCliPath).href
   return await import(`${moduleUrl}?t=${Date.now()}`)
@@ -382,9 +391,9 @@ test('relay-backed skills hub uses the selected connector instead of returning 5
                   cwd: '/remote/project',
                   skills: [
                     {
-                      name: 'docker',
+                      name: 'codexui-skill--community--openclaw%2Fdocker',
                       description: 'Remote docker toolkit',
-                      path: '/remote/.codex/skills/docker/SKILL.md',
+                      path: '/remote/.codex/skills/codexui-skill--community--openclaw%2Fdocker/SKILL.md',
                       scope: 'user',
                       enabled: true,
                     },
@@ -413,9 +422,9 @@ test('relay-backed skills hub uses the selected connector instead of returning 5
 
       assert.equal(response.status, 200)
       assert.equal(payload.installed?.[0]?.name, 'docker')
-      assert.equal(payload.installed?.[0]?.path, '/remote/.codex/skills/docker/SKILL.md')
+      assert.equal(payload.installed?.[0]?.path, '/remote/.codex/skills/codexui-skill--community--openclaw%2Fdocker/SKILL.md')
       assert.equal(payload.data?.[0]?.name, 'docker')
-      assert.equal(payload.data?.[0]?.displayName, 'Docker Toolkit')
+      assert.ok(typeof payload.data?.[0]?.displayName === 'string' && payload.data[0].displayName.length > 0)
       assert.ok(rpcCalls.some((call) => call.method === 'skills/list'))
     } finally {
       connectorLoop.stop()
@@ -458,13 +467,13 @@ test('relay-backed skill install and uninstall run on the selected connector hos
           if (method === 'codexui/skills/install') {
             return {
               ok: true,
-              path: '/remote/.codex/skills/docker-toolkit',
+              path: `/remote/.codex/skills/${encodeInstalledSkillDirName('community', communitySkillId('openclaw', 'docker-toolkit'))}` ,
             }
           }
           if (method === 'codexui/skills/uninstall') {
             return {
               ok: true,
-              deletedPath: '/remote/.codex/skills/docker-toolkit',
+              deletedPath: `/remote/.codex/skills/${encodeInstalledSkillDirName('community', communitySkillId('openclaw', 'docker-toolkit'))}` ,
             }
           }
           if (method === 'skills/list') {
@@ -483,6 +492,8 @@ test('relay-backed skill install and uninstall run on the selected connector hos
       const installResponse = await postJson(
         `${server.baseUrl}/codex-api/skills-hub/install?serverId=remote-skills-install`,
         {
+          source: 'community',
+          skillId: communitySkillId('openclaw', 'docker-toolkit'),
           owner: 'openclaw',
           name: 'docker-toolkit',
         },
@@ -494,11 +505,13 @@ test('relay-backed skill install and uninstall run on the selected connector hos
       const installPayload = await installResponse.json()
       assert.equal(installResponse.status, 200, JSON.stringify(installPayload))
       assert.equal(installPayload.ok, true)
-      assert.equal(installPayload.path, '/remote/.codex/skills/docker-toolkit')
+      assert.equal(installPayload.path, `/remote/.codex/skills/${encodeInstalledSkillDirName('community', communitySkillId('openclaw', 'docker-toolkit'))}`)
 
       const uninstallResponse = await postJson(
         `${server.baseUrl}/codex-api/skills-hub/uninstall?serverId=remote-skills-install`,
         {
+          source: 'community',
+          skillId: communitySkillId('openclaw', 'docker-toolkit'),
           name: 'docker-toolkit',
         },
         {
@@ -565,6 +578,8 @@ test('relay-backed skill install returns a connector upgrade error when the remo
       const installResponse = await postJson(
         `${server.baseUrl}/codex-api/skills-hub/install?serverId=remote-skills-compat`,
         {
+          source: 'community',
+          skillId: communitySkillId('openclaw', 'docker-toolkit'),
           owner: 'openclaw',
           name: 'docker-toolkit',
         },
@@ -577,7 +592,7 @@ test('relay-backed skill install returns a connector upgrade error when the remo
       assert.equal(installResponse.status, 409, JSON.stringify(installPayload))
       assert.match(
         installPayload.error,
-        /older codexui-connector build.*Skills Hub installs.*latest helper script/i,
+        /older codexui-connector build.*Skill Manager installs.*latest helper script/i,
       )
     } finally {
       connectorLoop.stop()

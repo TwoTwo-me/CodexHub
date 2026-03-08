@@ -1,9 +1,15 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { cp, mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { BridgePendingServerRequest, BridgeServerRequestReply } from '../shared/serverRequestBridge.js'
 import type { BridgeSkillInstallPayload, BridgeSkillUninstallPayload } from '../shared/serverSkillsBridge.js'
+import {
+  INSTALLED_SKILL_METADATA_FILE,
+  encodeInstalledSkillDirName,
+  resolveSkillCloneSpec,
+  type InstalledSkillMetadata,
+} from '../shared/skillSources.js'
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -221,30 +227,44 @@ export class LocalCodexAppServer {
 
   async installSkillFromHub(payload: BridgeSkillInstallPayload): Promise<{ ok: true; path: string }> {
     await this.ensureInitialized()
-    const owner = typeof payload?.owner === 'string' ? payload.owner.trim() : ''
+    const source = payload?.source
+    const skillId = typeof payload?.skillId === 'string' ? payload.skillId.trim() : ''
     const name = typeof payload?.name === 'string' ? payload.name.trim() : ''
-    if (!owner || !name) {
-      throw new Error('Missing owner or name')
+    if (!source || !skillId || !name) {
+      throw new Error('Missing source, skillId, or name')
+    }
+
+    const cloneSpec = resolveSkillCloneSpec(source, skillId)
+    if (!cloneSpec) {
+      throw new Error('Unsupported skill source or identifier')
     }
 
     const repoDir = await mkdtemp(join(tmpdir(), 'codexui-skill-installer-'))
-    const sparsePath = `skills/${owner}/${name}`
     try {
       await this.runCommand('git', [
         'clone',
         '--depth', '1',
         '--filter=blob:none',
         '--sparse',
-        'https://github.com/openclaw/skills.git',
+        cloneSpec.repoUrl,
         repoDir,
       ])
-      await this.runCommand('git', ['sparse-checkout', 'set', sparsePath], repoDir)
+      await this.runCommand('git', ['sparse-checkout', 'set', cloneSpec.sparsePath], repoDir)
       const installDest = await this.detectUserSkillsDir()
-      const sourceDir = join(repoDir, 'skills', owner, name)
-      const targetDir = join(installDest, name)
+      const sourceDir = join(repoDir, ...cloneSpec.sourceDirSegments)
+      const targetDir = join(installDest, encodeInstalledSkillDirName(source, skillId))
       await rm(targetDir, { recursive: true, force: true })
       await mkdir(installDest, { recursive: true })
       await cp(sourceDir, targetDir, { recursive: true })
+      const metadata: InstalledSkillMetadata = {
+        source,
+        skillId,
+        owner: typeof payload?.owner === 'string' ? payload.owner.trim() : source,
+        name,
+        displayName: name,
+        url: '',
+      }
+      await writeFile(join(targetDir, INSTALLED_SKILL_METADATA_FILE), JSON.stringify(metadata, null, 2), 'utf8')
       await this.ensureInstalledSkillIsValid(targetDir)
       return { ok: true, path: targetDir }
     } finally {
@@ -282,12 +302,13 @@ export class LocalCodexAppServer {
 
   async uninstallSkillFromHub(payload: BridgeSkillUninstallPayload): Promise<{ ok: true; deletedPath: string }> {
     await this.ensureInitialized()
-    const name = typeof payload?.name === 'string' ? payload.name.trim() : ''
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name)) {
-      throw new Error('Invalid skill name')
+    const source = payload?.source
+    const skillId = typeof payload?.skillId === 'string' ? payload.skillId.trim() : ''
+    if (!source || !skillId) {
+      throw new Error('Missing source or skillId')
     }
     const skillsRoot = resolve(this.getSkillsInstallDir())
-    const target = join(skillsRoot, name)
+    const target = join(skillsRoot, encodeInstalledSkillDirName(source, skillId))
     if (!target.startsWith(`${skillsRoot}/`) && target !== skillsRoot) {
       throw new Error('Refusing to delete outside skills directory')
     }

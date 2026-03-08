@@ -47,6 +47,21 @@ import {
   SERVER_SKILLS_UNINSTALL_METHOD,
 } from '../shared/serverSkillsBridge.js'
 import {
+  DEFAULT_SKILL_SOURCE,
+  INSTALLED_SKILL_METADATA_FILE,
+  buildCommunitySkillId,
+  buildOpenAiSkillId,
+  decodeInstalledSkillDirName,
+  encodeInstalledSkillDirName,
+  getSkillSourceLabel,
+  normalizeSkillSourceId,
+  parseCommunitySkillId,
+  parseOpenAiSkillId,
+  resolveSkillCloneSpec,
+  type InstalledSkillMetadata,
+  type SkillSourceId,
+} from '../shared/skillSources.js'
+import {
   SERVER_METHOD_CATALOG_METHOD,
   SERVER_NOTIFICATION_CATALOG_METHOD,
 } from '../shared/serverMethodCatalogBridge.js'
@@ -329,6 +344,10 @@ async function ensureInstalledSkillIsValid(appServer: AppServerProcess, skillPat
 }
 
 type SkillHubEntry = {
+  source: SkillSourceId
+  sourceLabel: string
+  skillId: string
+  installName: string
   name: string
   owner: string
   description: string
@@ -342,8 +361,16 @@ type SkillHubEntry = {
 }
 
 type SkillsTreeEntry = {
+  source: SkillSourceId
+  sourceLabel: string
+  skillId: string
+  installName: string
   name: string
   owner: string
+  description: string
+  displayName: string
+  publishedAt: number
+  avatarUrl: string
   url: string
 }
 
@@ -354,14 +381,218 @@ type SkillsTreeCache = {
 
 type MetaJson = {
   displayName?: string
+  description?: string
   owner?: string
   slug?: string
   latest?: { publishedAt?: number }
 }
 
+type InstalledSkillInfo = {
+  source: SkillSourceId
+  sourceLabel: string
+  skillId: string
+  installName: string
+  name: string
+  owner: string
+  displayName: string
+  description: string
+  url: string
+  path: string
+  enabled: boolean
+}
+
+type SkillSourceDefinition = {
+  id: SkillSourceId
+  treeUrl: () => string
+  rawBaseUrl: () => string
+  webBaseUrl: () => string
+  parseTree: (payload: { tree?: Array<{ path: string; type: string }> }) => SkillsTreeEntry[]
+  readmeUrl: (skillId: string, fileName: string) => string | null
+}
+
 const TREE_CACHE_TTL_MS = 5 * 60 * 1000
-let skillsTreeCache: SkillsTreeCache | null = null
+const skillsTreeCache = new Map<SkillSourceId, SkillsTreeCache>()
 const metaCache = new Map<string, { description: string; displayName: string; publishedAt: number }>()
+
+function skillMetaCacheKey(source: SkillSourceId, skillId: string): string {
+  return `${source}:${skillId}`
+}
+
+function getSourceAvatarUrl(source: SkillSourceId, owner: string): string {
+  if (source === 'openai') {
+    return 'https://github.com/openai.png?size=40'
+  }
+  return `https://github.com/${owner}.png?size=40`
+}
+
+function titleCaseSkillName(value: string): string {
+  return value
+    .replace(/^\./u, '')
+    .split(/[-_]+/u)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ')
+}
+
+function getCommunitySkillsTreeUrl(): string {
+  const value = process.env.CODEXUI_SKILLS_HUB_TREE_URL?.trim()
+  return value && value.length > 0
+    ? value
+    : 'https://api.github.com/repos/openclaw/skills/git/trees/main?recursive=1'
+}
+
+function getCommunitySkillsRawBaseUrl(): string {
+  const value = process.env.CODEXUI_SKILLS_HUB_RAW_BASE_URL?.trim()
+  return value && value.length > 0
+    ? value.replace(/\/+$/u, '')
+    : 'https://raw.githubusercontent.com/openclaw/skills/main'
+}
+
+function getCommunitySkillsWebBaseUrl(): string {
+  const value = process.env.CODEXUI_SKILLS_HUB_WEB_BASE_URL?.trim()
+  return value && value.length > 0
+    ? value.replace(/\/+$/u, '')
+    : 'https://github.com/openclaw/skills/tree/main'
+}
+
+function getOpenAiSkillsTreeUrl(): string {
+  const value = process.env.CODEXUI_OPENAI_SKILLS_TREE_URL?.trim()
+  return value && value.length > 0
+    ? value
+    : 'https://api.github.com/repos/openai/skills/git/trees/main?recursive=1'
+}
+
+function getOpenAiSkillsRawBaseUrl(): string {
+  const value = process.env.CODEXUI_OPENAI_SKILLS_RAW_BASE_URL?.trim()
+  return value && value.length > 0
+    ? value.replace(/\/+$/u, '')
+    : 'https://raw.githubusercontent.com/openai/skills/main'
+}
+
+function getOpenAiSkillsWebBaseUrl(): string {
+  const value = process.env.CODEXUI_OPENAI_SKILLS_WEB_BASE_URL?.trim()
+  return value && value.length > 0
+    ? value.replace(/\/+$/u, '')
+    : 'https://github.com/openai/skills/tree/main'
+}
+
+function buildCommunitySkillsRawUrl(owner: string, skillName: string, fileName: string): string {
+  return `${getCommunitySkillsRawBaseUrl()}/skills/${owner}/${skillName}/${fileName}`
+}
+
+function buildCommunitySkillsWebUrl(owner: string, skillName: string): string {
+  return `${getCommunitySkillsWebBaseUrl()}/skills/${owner}/${skillName}`
+}
+
+function buildOpenAiSkillsRawUrl(group: string, skillName: string, fileName: string): string {
+  return `${getOpenAiSkillsRawBaseUrl()}/skills/${group}/${skillName}/${fileName}`
+}
+
+function buildOpenAiSkillsWebUrl(group: string, skillName: string): string {
+  return `${getOpenAiSkillsWebBaseUrl()}/skills/${group}/${skillName}`
+}
+
+const SKILL_SOURCE_DEFINITIONS: Record<SkillSourceId, SkillSourceDefinition> = {
+  community: {
+    id: 'community',
+    treeUrl: getCommunitySkillsTreeUrl,
+    rawBaseUrl: getCommunitySkillsRawBaseUrl,
+    webBaseUrl: getCommunitySkillsWebBaseUrl,
+    parseTree(payload) {
+      const metaPattern = /^skills\/([^/]+)\/([^/]+)\/_meta\.json$/
+      const seen = new Set<string>()
+      const entries: SkillsTreeEntry[] = []
+      for (const node of payload.tree ?? []) {
+        const match = metaPattern.exec(node.path)
+        if (!match) continue
+        const [, owner, skillName] = match
+        const skillId = buildCommunitySkillId(owner, skillName)
+        if (seen.has(skillId)) continue
+        seen.add(skillId)
+        entries.push({
+          source: 'community',
+          sourceLabel: getSkillSourceLabel('community'),
+          skillId,
+          installName: encodeInstalledSkillDirName('community', skillId),
+          name: skillName,
+          owner,
+          description: `Community skill from ${owner}`,
+          displayName: titleCaseSkillName(skillName),
+          publishedAt: 0,
+          avatarUrl: getSourceAvatarUrl('community', owner),
+          url: buildCommunitySkillsWebUrl(owner, skillName),
+        })
+      }
+      return entries
+    },
+    readmeUrl(skillId, fileName) {
+      const parsed = parseCommunitySkillId(skillId)
+      if (!parsed) return null
+      return buildCommunitySkillsRawUrl(parsed.owner, parsed.name, fileName)
+    },
+  },
+  openai: {
+    id: 'openai',
+    treeUrl: getOpenAiSkillsTreeUrl,
+    rawBaseUrl: getOpenAiSkillsRawBaseUrl,
+    webBaseUrl: getOpenAiSkillsWebBaseUrl,
+    parseTree(payload) {
+      const skillPattern = /^skills\/(\.[^/]+)\/([^/]+)\/SKILL\.md$/
+      const seen = new Set<string>()
+      const entries: SkillsTreeEntry[] = []
+      for (const node of payload.tree ?? []) {
+        const match = skillPattern.exec(node.path)
+        if (!match) continue
+        const [, group, skillName] = match
+        const skillId = buildOpenAiSkillId(group, skillName)
+        if (seen.has(skillId)) continue
+        seen.add(skillId)
+        const collectionLabel = titleCaseSkillName(group)
+        entries.push({
+          source: 'openai',
+          sourceLabel: getSkillSourceLabel('openai'),
+          skillId,
+          installName: encodeInstalledSkillDirName('openai', skillId),
+          name: skillName,
+          owner: `OpenAI · ${collectionLabel}`,
+          description: `${collectionLabel} skill from the OpenAI Skills repository`,
+          displayName: titleCaseSkillName(skillName),
+          publishedAt: 0,
+          avatarUrl: getSourceAvatarUrl('openai', 'openai'),
+          url: buildOpenAiSkillsWebUrl(group, skillName),
+        })
+      }
+      return entries
+    },
+    readmeUrl(skillId, fileName) {
+      const parsed = parseOpenAiSkillId(skillId)
+      if (!parsed) return null
+      return buildOpenAiSkillsRawUrl(parsed.group, parsed.name, fileName)
+    },
+  },
+}
+
+function getSkillSourceDefinition(source: SkillSourceId): SkillSourceDefinition {
+  return SKILL_SOURCE_DEFINITIONS[source]
+}
+
+function skillIdentityKey(source: SkillSourceId, skillId: string): string {
+  return encodeInstalledSkillDirName(source, skillId)
+}
+
+function buildSkillRawUrl(source: SkillSourceId, skillId: string, fileName = 'SKILL.md'): string {
+  const sourceDef = getSkillSourceDefinition(source)
+  return sourceDef.readmeUrl(skillId, fileName) ?? ''
+}
+
+function buildSkillWebUrl(source: SkillSourceId, skillId: string): string {
+  if (source === 'community') {
+    const parsed = parseCommunitySkillId(skillId)
+    return parsed ? buildCommunitySkillsWebUrl(parsed.owner, parsed.name) : ''
+  }
+  const parsed = parseOpenAiSkillId(skillId)
+  return parsed ? buildOpenAiSkillsWebUrl(parsed.group, parsed.name) : ''
+}
 
 async function getGhToken(): Promise<string | null> {
   try {
@@ -385,124 +616,153 @@ async function ghFetch(url: string): Promise<Response> {
   return fetch(url, { headers })
 }
 
-async function fetchSkillsTree(): Promise<SkillsTreeEntry[]> {
-  if (skillsTreeCache && Date.now() - skillsTreeCache.fetchedAt < TREE_CACHE_TTL_MS) {
-    return skillsTreeCache.entries
+async function fetchSkillsTree(source: SkillSourceId): Promise<SkillsTreeEntry[]> {
+  const cached = skillsTreeCache.get(source)
+  if (cached && Date.now() - cached.fetchedAt < TREE_CACHE_TTL_MS) {
+    return cached.entries
   }
 
-  const resp = await ghFetch(getSkillsHubTreeUrl())
+  const sourceDef = getSkillSourceDefinition(source)
+  const resp = await ghFetch(sourceDef.treeUrl())
   if (!resp.ok) throw new Error(`GitHub tree API returned ${resp.status}`)
   const data = (await resp.json()) as { tree?: Array<{ path: string; type: string }> }
-
-  const metaPattern = /^skills\/([^/]+)\/([^/]+)\/_meta\.json$/
-  const seen = new Set<string>()
-  const entries: SkillsTreeEntry[] = []
-
-  for (const node of data.tree ?? []) {
-    const match = metaPattern.exec(node.path)
-    if (!match) continue
-    const [, owner, skillName] = match
-    const key = `${owner}/${skillName}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    entries.push({
-      name: skillName,
-      owner,
-      url: buildSkillsHubWebUrl(owner, skillName),
-    })
-  }
-
-  skillsTreeCache = { entries, fetchedAt: Date.now() }
+  const entries = sourceDef.parseTree(data)
+  skillsTreeCache.set(source, { entries, fetchedAt: Date.now() })
   return entries
 }
 
 async function fetchMetaBatch(entries: SkillsTreeEntry[]): Promise<void> {
-  const toFetch = entries.filter((e) => !metaCache.has(`${e.owner}/${e.name}`))
+  const toFetch = entries.filter((entry) => !metaCache.has(skillMetaCacheKey(entry.source, entry.skillId)))
   if (toFetch.length === 0) return
 
   const batch = toFetch.slice(0, 50)
-  const results = await Promise.allSettled(
-    batch.map(async (e) => {
-      const rawUrl = buildSkillsHubRawUrl(e.owner, e.name, '_meta.json')
-      const resp = await fetch(rawUrl)
+  await Promise.allSettled(
+    batch.map(async (entry) => {
+      if (entry.source === 'community') {
+        const parsed = parseCommunitySkillId(entry.skillId)
+        if (!parsed) return
+        const resp = await fetch(buildCommunitySkillsRawUrl(parsed.owner, parsed.name, '_meta.json'))
+        if (!resp.ok) return
+        const meta = (await resp.json()) as MetaJson
+        metaCache.set(skillMetaCacheKey(entry.source, entry.skillId), {
+          displayName: typeof meta.displayName === 'string' ? meta.displayName : '',
+          description: typeof meta.description === 'string' ? meta.description : '',
+          publishedAt: meta.latest?.publishedAt ?? 0,
+        })
+        return
+      }
+
+      const parsed = parseOpenAiSkillId(entry.skillId)
+      if (!parsed) return
+      const resp = await fetch(buildOpenAiSkillsRawUrl(parsed.group, parsed.name, 'SKILL.md'))
       if (!resp.ok) return
-      const meta = (await resp.json()) as MetaJson
-      metaCache.set(`${e.owner}/${e.name}`, {
-        displayName: typeof meta.displayName === 'string' ? meta.displayName : '',
-        description: typeof meta.displayName === 'string' ? meta.displayName : '',
-        publishedAt: meta.latest?.publishedAt ?? 0,
+      const skillMarkdown = await resp.text()
+      const frontmatter = /^---\s*([\s\S]*?)\n---/u.exec(skillMarkdown)?.[1] ?? ''
+      const displayName = /^\s*name:\s*["']?(.+?)["']?\s*$/mu.exec(frontmatter)?.[1]?.trim() || entry.displayName
+      const description = /^\s*description:\s*["']?(.+?)["']?\s*$/mu.exec(frontmatter)?.[1]?.trim() || entry.description
+      metaCache.set(skillMetaCacheKey(entry.source, entry.skillId), {
+        displayName,
+        description,
+        publishedAt: 0,
       })
     }),
   )
-  void results
 }
 
-function buildHubEntry(e: SkillsTreeEntry): SkillHubEntry {
-  const cached = metaCache.get(`${e.owner}/${e.name}`)
+function buildHubEntry(entry: SkillsTreeEntry): SkillHubEntry {
+  const cached = metaCache.get(skillMetaCacheKey(entry.source, entry.skillId))
   return {
-    name: e.name,
-    owner: e.owner,
-    description: cached?.description ?? '',
-    displayName: cached?.displayName ?? '',
-    publishedAt: cached?.publishedAt ?? 0,
-    avatarUrl: `https://github.com/${e.owner}.png?size=40`,
-    url: e.url,
+    ...entry,
+    description: cached?.description || entry.description,
+    displayName: cached?.displayName || entry.displayName,
+    publishedAt: cached?.publishedAt ?? entry.publishedAt,
     installed: false,
   }
 }
 
-function getSkillsHubTreeUrl(): string {
-  const value = process.env.CODEXUI_SKILLS_HUB_TREE_URL?.trim()
-  return value && value.length > 0
-    ? value
-    : 'https://api.github.com/repos/openclaw/skills/git/trees/main?recursive=1'
+async function readInstalledSkillMetadata(dirPath: string): Promise<InstalledSkillMetadata | null> {
+  try {
+    const raw = await readFile(join(dirPath, INSTALLED_SKILL_METADATA_FILE), 'utf8')
+    const parsed = JSON.parse(raw) as InstalledSkillMetadata
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed
+  } catch {
+    return null
+  }
 }
 
-function getSkillsHubRawBaseUrl(): string {
-  const value = process.env.CODEXUI_SKILLS_HUB_RAW_BASE_URL?.trim()
-  return value && value.length > 0
-    ? value.replace(/\/+$/u, '')
-    : 'https://raw.githubusercontent.com/openclaw/skills/main'
+function createInstalledSkillInfo(input: {
+  source: SkillSourceId
+  skillId: string
+  name: string
+  owner: string
+  displayName: string
+  description: string
+  url: string
+  path: string
+  enabled: boolean
+}): InstalledSkillInfo {
+  return {
+    source: input.source,
+    sourceLabel: getSkillSourceLabel(input.source),
+    skillId: input.skillId,
+    installName: encodeInstalledSkillDirName(input.source, input.skillId),
+    name: input.name,
+    owner: input.owner,
+    displayName: input.displayName,
+    description: input.description,
+    url: input.url,
+    path: input.path,
+    enabled: input.enabled,
+  }
 }
-
-function getSkillsHubWebBaseUrl(): string {
-  const value = process.env.CODEXUI_SKILLS_HUB_WEB_BASE_URL?.trim()
-  return value && value.length > 0
-    ? value.replace(/\/+$/u, '')
-    : 'https://github.com/openclaw/skills/tree/main'
-}
-
-function buildSkillsHubRawUrl(owner: string, skillName: string, fileName: string): string {
-  return `${getSkillsHubRawBaseUrl()}/skills/${owner}/${skillName}/${fileName}`
-}
-
-function buildSkillsHubWebUrl(owner: string, skillName: string): string {
-  return `${getSkillsHubWebBaseUrl()}/skills/${owner}/${skillName}`
-}
-
-type InstalledSkillInfo = { name: string; path: string; enabled: boolean }
 
 async function scanInstalledSkillsFromDisk(): Promise<Map<string, InstalledSkillInfo>> {
-  const map = new Map<string, InstalledSkillInfo>()
+  const installed = new Map<string, InstalledSkillInfo>()
   const skillsDir = getSkillsInstallDir()
   try {
     const entries = await readdir(skillsDir, { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name.startsWith('.')) continue
-      const skillMd = join(skillsDir, entry.name, 'SKILL.md')
+      const skillDir = join(skillsDir, entry.name)
+      const skillMd = join(skillDir, 'SKILL.md')
       try {
         await stat(skillMd)
-        map.set(entry.name, { name: entry.name, path: skillMd, enabled: true })
-      } catch {}
+      } catch {
+        continue
+      }
+
+      const decoded = decodeInstalledSkillDirName(entry.name)
+      if (!decoded) continue
+      const metadata = await readInstalledSkillMetadata(skillDir)
+      installed.set(entry.name, createInstalledSkillInfo({
+        source: decoded.source,
+        skillId: decoded.skillId,
+        name: metadata?.name || decoded.skillId.split('/').at(-1) || entry.name,
+        owner: metadata?.owner || decoded.source,
+        displayName: metadata?.displayName || metadata?.name || decoded.skillId.split('/').at(-1) || entry.name,
+        description: '',
+        url: metadata?.url || '',
+        path: skillMd,
+        enabled: true,
+      }))
     }
   } catch {}
-  return map
+  return installed
 }
 
-function mergeInstalledSkillsFromPayload(
-  installedMap: Map<string, InstalledSkillInfo>,
-  payload: unknown,
-): void {
+function deriveInstalledSkillDirName(skill: { name?: string; path?: string }): string {
+  const pathValue = typeof skill.path === 'string' ? skill.path.trim() : ''
+  if (pathValue.length > 0) {
+    const segments = pathValue.split('/').filter(Boolean)
+    if (segments.length >= 2) {
+      return segments[segments.length - 2]
+    }
+  }
+  return typeof skill.name === 'string' ? skill.name.trim() : ''
+}
+
+function mergeInstalledSkillsFromPayload(installedMap: Map<string, InstalledSkillInfo>, payload: unknown): void {
   const result = asRecord(payload) as {
     data?: Array<{
       skills?: Array<{ name?: string; path?: string; enabled?: boolean }>
@@ -511,34 +771,53 @@ function mergeInstalledSkillsFromPayload(
 
   for (const entry of result?.data ?? []) {
     for (const skill of entry.skills ?? []) {
-      if (!skill.name) continue
-      installedMap.set(skill.name, {
-        name: skill.name,
-        path: skill.path ?? '',
+      const installName = deriveInstalledSkillDirName(skill)
+      const decoded = decodeInstalledSkillDirName(installName)
+      if (!decoded) continue
+      installedMap.set(installName, createInstalledSkillInfo({
+        source: decoded.source,
+        skillId: decoded.skillId,
+        name: deriveSkillNameFromSource(decoded.source, decoded.skillId),
+        owner: deriveSkillOwnerFromSource(decoded.source, decoded.skillId),
+        displayName: '',
+        description: '',
+        url: '',
+        path: typeof skill.path === 'string' ? skill.path : '',
         enabled: skill.enabled !== false,
-      })
+      }))
     }
   }
 }
 
-async function installSkillFromGitHub(owner: string, name: string, installDest: string): Promise<string> {
+async function installSkillFromGitHub(
+  source: SkillSourceId,
+  skillId: string,
+  installDest: string,
+  metadata?: InstalledSkillMetadata,
+): Promise<string> {
+  const cloneSpec = resolveSkillCloneSpec(source, skillId)
+  if (!cloneSpec) {
+    throw new Error('Unsupported skill source or identifier')
+  }
   const repoDir = await mkdtemp(join(tmpdir(), 'codexui-skill-installer-'))
-  const sparsePath = `skills/${owner}/${name}`
   try {
     await runCommand('git', [
       'clone',
       '--depth', '1',
       '--filter=blob:none',
       '--sparse',
-      'https://github.com/openclaw/skills.git',
+      cloneSpec.repoUrl,
       repoDir,
     ])
-    await runCommand('git', ['sparse-checkout', 'set', sparsePath], { cwd: repoDir })
-    const sourceDir = join(repoDir, 'skills', owner, name)
-    const targetDir = join(installDest, name)
+    await runCommand('git', ['sparse-checkout', 'set', cloneSpec.sparsePath], { cwd: repoDir })
+    const sourceDir = join(repoDir, ...cloneSpec.sourceDirSegments)
+    const targetDir = join(installDest, encodeInstalledSkillDirName(source, skillId))
     await rm(targetDir, { recursive: true, force: true })
     await mkdir(installDest, { recursive: true })
     await cp(sourceDir, targetDir, { recursive: true })
+    if (metadata) {
+      await writeFile(join(targetDir, INSTALLED_SKILL_METADATA_FILE), JSON.stringify(metadata, null, 2), 'utf8')
+    }
     return targetDir
   } finally {
     await rm(repoDir, { recursive: true, force: true }).catch(() => {})
@@ -554,36 +833,122 @@ async function searchSkillsHub(
 ): Promise<SkillHubEntry[]> {
   const q = query.toLowerCase().trim()
   let filtered = q
-    ? allEntries.filter((s) => {
-        if (s.name.toLowerCase().includes(q) || s.owner.toLowerCase().includes(q)) return true
-        const cached = metaCache.get(`${s.owner}/${s.name}`)
-        if (cached?.displayName?.toLowerCase().includes(q)) return true
-        return false
-      })
+    ? allEntries.filter((entry) => {
+      if (entry.name.toLowerCase().includes(q) || entry.owner.toLowerCase().includes(q) || entry.skillId.toLowerCase().includes(q)) return true
+      const cached = metaCache.get(skillMetaCacheKey(entry.source, entry.skillId))
+      if (cached?.displayName?.toLowerCase().includes(q)) return true
+      return false
+    })
     : allEntries
 
   const page = filtered.slice(0, Math.min(limit * 2, 200))
   await fetchMetaBatch(page)
 
   let results = page.map(buildHubEntry)
-
   if (sort === 'date') {
-    results.sort((a, b) => b.publishedAt - a.publishedAt)
+    results.sort((left, right) => right.publishedAt - left.publishedAt)
   } else if (q) {
-    results.sort((a, b) => {
-      const aExact = a.name.toLowerCase() === q ? 1 : 0
-      const bExact = b.name.toLowerCase() === q ? 1 : 0
-      if (aExact !== bExact) return bExact - aExact
-      return b.publishedAt - a.publishedAt
+    results.sort((left, right) => {
+      const leftExact = left.name.toLowerCase() === q || left.displayName.toLowerCase() === q ? 1 : 0
+      const rightExact = right.name.toLowerCase() === q || right.displayName.toLowerCase() === q ? 1 : 0
+      if (leftExact !== rightExact) return rightExact - leftExact
+      return left.displayName.localeCompare(right.displayName)
     })
   }
 
-  return results.slice(0, limit).map((s) => {
-    const local = installedMap.get(s.name)
-    return local
-      ? { ...s, installed: true, path: local.path, enabled: local.enabled }
-      : s
+  return results.slice(0, limit).map((entry) => {
+    const installed = installedMap.get(entry.installName)
+    if (!installed) return entry
+    return {
+      ...entry,
+      owner: installed.owner || entry.owner,
+      displayName: installed.displayName || entry.displayName,
+      description: installed.description || entry.description,
+      url: installed.url || entry.url,
+      installed: true,
+      path: installed.path,
+      enabled: installed.enabled,
+    }
   })
+}
+
+function buildInstalledSkillEntry(info: InstalledSkillInfo, allEntries: SkillsTreeEntry[]): SkillHubEntry {
+  const entry = allEntries.find((candidate) => candidate.installName === info.installName)
+  if (entry) {
+    return {
+      ...buildHubEntry(entry),
+      installed: true,
+      path: info.path,
+      enabled: info.enabled,
+    }
+  }
+  return {
+    source: info.source,
+    sourceLabel: info.sourceLabel,
+    skillId: info.skillId,
+    installName: info.installName,
+    name: info.name,
+    owner: info.owner,
+    description: info.description,
+    displayName: info.displayName,
+    publishedAt: 0,
+    avatarUrl: getSourceAvatarUrl(info.source, info.owner),
+    url: info.url,
+    installed: true,
+    path: info.path,
+    enabled: info.enabled,
+  }
+}
+
+function deriveSkillNameFromSource(source: SkillSourceId, skillId: string): string {
+  if (source === 'community') {
+    return parseCommunitySkillId(skillId)?.name ?? skillId
+  }
+  return parseOpenAiSkillId(skillId)?.name ?? skillId
+}
+
+function deriveSkillOwnerFromSource(source: SkillSourceId, skillId: string): string {
+  if (source === 'community') {
+    return parseCommunitySkillId(skillId)?.owner ?? source
+  }
+  const group = parseOpenAiSkillId(skillId)?.group ?? '.curated'
+  return `OpenAI · ${titleCaseSkillName(group)}`
+}
+
+function buildSkillWebUrlFromSource(source: SkillSourceId, skillId: string): string {
+  if (source === 'community') {
+    const parsed = parseCommunitySkillId(skillId)
+    return parsed ? buildCommunitySkillsWebUrl(parsed.owner, parsed.name) : ''
+  }
+  const parsed = parseOpenAiSkillId(skillId)
+  return parsed ? buildOpenAiSkillsWebUrl(parsed.group, parsed.name) : ''
+}
+
+function resolveSkillHubRequestInput(payload: Record<string, unknown> | null): {
+  source: SkillSourceId
+  skillId: string
+  name: string
+  owner: string
+} | null {
+  const source = normalizeSkillSourceId(payload?.source, DEFAULT_SKILL_SOURCE)
+  let skillId = typeof payload?.skillId === 'string' ? payload.skillId.trim() : ''
+  let name = typeof payload?.name === 'string' ? payload.name.trim() : ''
+  let owner = typeof payload?.owner === 'string' ? payload.owner.trim() : ''
+
+  if (!skillId && source === 'community' && owner && name) {
+    skillId = buildCommunitySkillId(owner, name)
+  }
+
+  if (!name && skillId) {
+    name = deriveSkillNameFromSource(source, skillId)
+  }
+
+  if (!owner && skillId) {
+    owner = deriveSkillOwnerFromSource(source, skillId)
+  }
+
+  if (!skillId || !name) return null
+  return { source, skillId, name, owner }
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -2871,9 +3236,13 @@ function readConnectorBridgeFeatureLabel(method: string): string {
     case SERVER_REQUESTS_RESPOND_METHOD:
       return 'hook approval replies'
     case SERVER_SKILLS_INSTALL_METHOD:
-      return 'Skills Hub installs'
+      return 'Skill Manager installs'
     case SERVER_SKILLS_UNINSTALL_METHOD:
-      return 'Skills Hub uninstalls'
+      return 'Skill Manager uninstalls'
+    case SERVER_METHOD_CATALOG_METHOD:
+      return 'connector method catalog lookups'
+    case SERVER_NOTIFICATION_CATALOG_METHOD:
+      return 'connector notification catalog lookups'
     case SERVER_METHOD_CATALOG_METHOD:
       return 'Hook settings capability discovery'
     case SERVER_NOTIFICATION_CATALOG_METHOD:
@@ -4649,7 +5018,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           const q = url.searchParams.get('q') || ''
           const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 200)
           const sort = url.searchParams.get('sort') || 'date'
-          const allEntries = await fetchSkillsTree()
+          const source = normalizeSkillSourceId(url.searchParams.get('source'), DEFAULT_SKILL_SOURCE)
+          const allEntries = await fetchSkillsTree(source)
 
           const installedMap = resolved.server.transport === 'relay'
             ? new Map<string, InstalledSkillInfo>()
@@ -4680,44 +5050,43 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
               throw error
             }
           } else {
-            const runtime = requireLocalRuntime(resolved, 'Skills hub')
+            const runtime = requireLocalRuntime(resolved, 'Skill Manager')
             try {
               const result = await runtime.appServer.rpc('skills/list', {})
               mergeInstalledSkillsFromPayload(installedMap, result)
             } catch {}
           }
 
-          const installedHubEntries = allEntries.filter((e) => installedMap.has(e.name))
+          const installedHubEntries = allEntries.filter((entry) => installedMap.has(skillIdentityKey(entry.source, entry.skillId)))
           await fetchMetaBatch(installedHubEntries)
 
-          const installed: SkillHubEntry[] = []
-          for (const [, info] of installedMap) {
-            const hubEntry = allEntries.find((e) => e.name === info.name)
-            const base = hubEntry ? buildHubEntry(hubEntry) : {
-              name: info.name, owner: 'local', description: '', displayName: '',
-              publishedAt: 0, avatarUrl: '', url: '', installed: false,
-            }
-            installed.push({ ...base, installed: true, path: info.path, enabled: info.enabled })
-          }
+          const installed: SkillHubEntry[] = installedHubEntries.map((entry) => {
+            const info = installedMap.get(skillIdentityKey(entry.source, entry.skillId))
+            const base = buildHubEntry(entry)
+            return info
+              ? { ...base, installed: true, path: info.path, enabled: info.enabled }
+              : base
+          })
 
           const results = await searchSkillsHub(allEntries, q, limit, sort, installedMap)
-          setJson(res, 200, { data: results, installed, total: allEntries.length })
+          setJson(res, 200, { data: results, installed, total: allEntries.length, source, sourceLabel: getSkillSourceLabel(source) })
         } catch (error) {
-          setJson(res, 502, { error: getErrorMessage(error, 'Failed to fetch skills hub') })
+          setJson(res, 502, { error: getErrorMessage(error, 'Failed to fetch Skill Manager data') })
         }
         return
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/skills-hub/readme') {
         try {
+          const source = normalizeSkillSourceId(url.searchParams.get('source'), DEFAULT_SKILL_SOURCE)
           const owner = url.searchParams.get('owner') || ''
           const name = url.searchParams.get('name') || ''
-          if (!owner || !name) {
-            setJson(res, 400, { error: 'Missing owner or name' })
+          const skillId = (url.searchParams.get('skillId') || '').trim() || (source === 'community' && owner && name ? buildCommunitySkillId(owner, name) : '')
+          if (!skillId) {
+            setJson(res, 400, { error: 'Missing skillId' })
             return
           }
-          const rawUrl = buildSkillsHubRawUrl(owner, name, 'SKILL.md')
-          const resp = await fetch(rawUrl)
+          const resp = await fetch(buildSkillRawUrl(source, skillId))
           if (!resp.ok) throw new Error(`Failed to fetch SKILL.md: ${resp.status}`)
           const content = await resp.text()
           setJson(res, 200, { content })
@@ -4730,32 +5099,42 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'POST' && url.pathname === '/codex-api/skills-hub/install') {
         try {
           const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+          const payload = asRecord(await readJsonBody(req))
+          const source = normalizeSkillSourceId(payload?.source, DEFAULT_SKILL_SOURCE)
+          const owner = typeof payload?.owner === 'string' ? payload.owner.trim() : ''
+          const name = typeof payload?.name === 'string' ? payload.name.trim() : ''
+          const skillId = typeof payload?.skillId === 'string' && payload.skillId.trim().length > 0
+            ? payload.skillId.trim()
+            : (source === 'community' && owner && name ? buildCommunitySkillId(owner, name) : '')
+          if (!skillId || !name) {
+            setJson(res, 400, { error: 'Missing source skill identity' })
+            return
+          }
+
           if (resolved.server.transport === 'relay') {
-            const payload = asRecord(await readJsonBody(req))
-            const owner = typeof payload?.owner === 'string' ? payload.owner : ''
-            const name = typeof payload?.name === 'string' ? payload.name : ''
             const result = await dispatchServerScopedBridgeMethod(
               resolved,
               SERVER_SKILLS_INSTALL_METHOD,
-              { owner, name },
+              { source, skillId, owner, name },
               relayHub,
             )
             setJson(res, 200, result)
             return
           }
-          requireLoopbackForSensitiveMutation(req, 'Skills installation')
-          const runtime = requireLocalRuntime(resolved, 'Skills installation')
-          const payload = asRecord(await readJsonBody(req))
-          const owner = typeof payload?.owner === 'string' ? payload.owner : ''
-          const name = typeof payload?.name === 'string' ? payload.name : ''
-          if (!owner || !name) {
-            setJson(res, 400, { error: 'Missing owner or name' })
-            return
-          }
+          requireLoopbackForSensitiveMutation(req, 'Skill Manager installation')
+          const runtime = requireLocalRuntime(resolved, 'Skill Manager installation')
           const installDest = await detectUserSkillsDir(runtime.appServer)
-          const skillDir = await installSkillFromGitHub(owner, name, installDest)
+          const metadata: InstalledSkillMetadata = {
+            source,
+            skillId,
+            owner: owner || source,
+            name,
+            displayName: name,
+            url: buildSkillWebUrl(source, skillId),
+          }
+          const skillDir = await installSkillFromGitHub(source, skillId, installDest, metadata)
           await ensureInstalledSkillIsValid(runtime.appServer, skillDir)
-          setJson(res, 200, { ok: true, path: skillDir })
+          setJson(res, 200, { ok: true, path: skillDir, source, skillId })
         } catch (error) {
           if (error instanceof BridgeHttpError) {
             setJson(res, error.statusCode, { error: error.message })
@@ -4769,41 +5148,36 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'POST' && url.pathname === '/codex-api/skills-hub/uninstall') {
         try {
           const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+          const payload = asRecord(await readJsonBody(req))
+          const source = normalizeSkillSourceId(payload?.source, DEFAULT_SKILL_SOURCE)
+          const owner = typeof payload?.owner === 'string' ? payload.owner.trim() : ''
+          const name = typeof payload?.name === 'string' ? payload.name.trim() : ''
+          const skillId = typeof payload?.skillId === 'string' && payload.skillId.trim().length > 0
+            ? payload.skillId.trim()
+            : (source === 'community' && owner && name ? buildCommunitySkillId(owner, name) : '')
+          if (!skillId) {
+            setJson(res, 400, { error: 'Missing skillId' })
+            return
+          }
+
           if (resolved.server.transport === 'relay') {
-            const payload = asRecord(await readJsonBody(req))
-            const name = typeof payload?.name === 'string' ? payload.name : ''
             const result = await dispatchServerScopedBridgeMethod(
               resolved,
               SERVER_SKILLS_UNINSTALL_METHOD,
-              { name },
+              { source, skillId, path: typeof payload?.path === 'string' ? payload.path.trim() : '' },
               relayHub,
             )
             setJson(res, 200, result)
             return
           }
-          requireLoopbackForSensitiveMutation(req, 'Skills uninstall')
-          const runtime = requireLocalRuntime(resolved, 'Skills uninstall')
-          const payload = asRecord(await readJsonBody(req))
-          const name = typeof payload?.name === 'string' ? payload.name : ''
-          const requestedPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
-          if (requestedPath.length > 0) {
-            setJson(res, 400, { error: 'Direct path uninstall is disabled. Use skill name only.' })
-            return
-          }
-          if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name.trim())) {
-            setJson(res, 400, { error: 'Invalid skill name' })
-            return
-          }
+          requireLoopbackForSensitiveMutation(req, 'Skill Manager uninstall')
+          const runtime = requireLocalRuntime(resolved, 'Skill Manager uninstall')
           const skillsRoot = resolve(getSkillsInstallDir())
-          const target = requestedPath || (name ? join(skillsRoot, name) : '')
-          if (!target) {
-            setJson(res, 400, { error: 'Missing skill name' })
-            return
-          }
+          const target = join(skillsRoot, encodeInstalledSkillDirName(source, skillId))
           const normalizedTarget = ensurePathInside(skillsRoot, target, 'Refusing to delete outside skills directory')
           await rm(normalizedTarget, { recursive: true, force: true })
           try { await runtime.appServer.rpc('skills/list', { forceReload: true }) } catch {}
-          setJson(res, 200, { ok: true, deletedPath: normalizedTarget })
+          setJson(res, 200, { ok: true, deletedPath: normalizedTarget, source, skillId })
         } catch (error) {
           if (error instanceof BridgeHttpError) {
             setJson(res, error.statusCode, { error: error.message })
