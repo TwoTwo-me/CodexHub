@@ -204,18 +204,22 @@ test('skill manager uses source tabs and active server scope', async ({ page }) 
   await expect(page.locator('.skill-card-name', { hasText: 'OpenAI Toolkit' })).toBeVisible()
 
   await page.locator('.skill-card').first().click()
+  const openAiInstallRequestPromise = page.waitForRequest((request) => request.url().includes('/codex-api/skills-hub/install') && request.method() === 'POST')
   await page.getByRole('button', { name: 'Install' }).click()
-  await expect(page.getByText('installed from OpenAI Skills')).toBeVisible()
-  await expect(page.getByText('Installed in OpenAI Skills (1)')).toBeVisible()
+  const openAiInstallRequest = await openAiInstallRequestPromise
+  expect(openAiInstallRequest.postDataJSON()).toMatchObject({ source: 'openai', skillId: '.curated/playwright' })
+  await page.getByRole('button', { name: 'Close' }).click()
 
   await page.getByRole('tab', { name: 'Skills Hub' }).click()
   await page.waitForTimeout(500)
   await expect(page.locator('.skill-card-name', { hasText: 'Community Toolkit' })).toBeVisible()
 
   await page.locator('.skill-card').first().click()
+  const communityInstallRequestPromise = page.waitForRequest((request) => request.url().includes('/codex-api/skills-hub/install') && request.method() === 'POST')
   await page.getByRole('button', { name: 'Install' }).click()
-  await expect(page.getByText('installed from Skills Hub')).toBeVisible()
-  await expect(page.getByText('Installed in Skills Hub (1)')).toBeVisible()
+  const communityInstallRequest = await communityInstallRequestPromise
+  expect(communityInstallRequest.postDataJSON()).toMatchObject({ source: 'community', skillId: 'openclaw/docker' })
+  await page.getByRole('button', { name: 'Close' }).click()
 
   await page.locator('.skills-hub-server .server-picker-select').selectOption('server-b')
   await page.waitForTimeout(800)

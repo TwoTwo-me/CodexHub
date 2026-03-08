@@ -266,6 +266,17 @@ async function startFakeSkillsHub() {
       return
     }
 
+    if (url.pathname === '/api/github/openai-tree') {
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'application/json; charset=utf-8')
+      res.end(JSON.stringify({
+        tree: [
+          { path: 'skills/.curated/openai-docs/SKILL.md', type: 'blob' },
+        ],
+      }))
+      return
+    }
+
     if (url.pathname === '/raw/skills/openclaw/docker/_meta.json') {
       res.statusCode = 200
       res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -282,6 +293,13 @@ async function startFakeSkillsHub() {
       res.statusCode = 200
       res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
       res.end('# Docker Toolkit\n\nRemote connector skill readme')
+      return
+    }
+
+    if (url.pathname === '/raw/openai/skills/.curated/openai-docs/SKILL.md') {
+      res.statusCode = 200
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
+      res.end('---\nname: \"OpenAI Docs\"\ndescription: \"OpenAI documentation lookup skill\"\n---\n\n# OpenAI Docs\n\nSearch docs.')
       return
     }
 
@@ -533,6 +551,121 @@ test('relay-backed skill install and uninstall run on the selected connector hos
     }
   } finally {
     await server.stop()
+  }
+})
+
+test('relay-backed Skill Manager supports OpenAI source browse and install flows', async () => {
+  const skillsHub = await startFakeSkillsHub()
+  const server = await startServer({
+    password: 'relay-openai-skills-bootstrap-1',
+    extraEnv: {
+      CODEXUI_SKILLS_HUB_TREE_URL: `${skillsHub.baseUrl}/api/github/tree`,
+      CODEXUI_SKILLS_HUB_RAW_BASE_URL: `${skillsHub.baseUrl}/raw`,
+      CODEXUI_SKILLS_HUB_WEB_BASE_URL: 'https://skills.example.test',
+      CODEXUI_OPENAI_SKILLS_TREE_URL: `${skillsHub.baseUrl}/api/github/openai-tree`,
+      CODEXUI_OPENAI_SKILLS_RAW_BASE_URL: `${skillsHub.baseUrl}/raw/openai`,
+      CODEXUI_OPENAI_SKILLS_WEB_BASE_URL: 'https://openai.example.test',
+    },
+  })
+  const connectorModule = await loadConnectorModule()
+
+  try {
+    const cookie = await loginAndCompleteBootstrap(
+      server.baseUrl,
+      'relay-admin',
+      'relay-openai-skills-bootstrap-1',
+      'relay-openai-skills-admin',
+      'relay-openai-skills-bootstrap-2',
+    )
+    const credentialToken = await createConnectorCredential(server.baseUrl, cookie, 'remote-openai-skills')
+    const rpcCalls = []
+
+    const transport = new connectorModule.HttpRelayHubTransport(server.baseUrl, { allowInsecureHttp: true })
+    const connector = new connectorModule.CodexRelayConnector({
+      token: credentialToken,
+      transport,
+      connectorId: 'remote-openai-skills',
+      pollWaitMs: 50,
+      notificationFlushDelayMs: 0,
+      appServer: {
+        async rpc(method, params) {
+          rpcCalls.push({ method, params })
+          if (method === 'skills/list') {
+            return {
+              data: [
+                {
+                  cwd: '/remote/project',
+                  skills: [
+                    {
+                      name: 'openai-docs',
+                      description: 'OpenAI documentation lookup skill',
+                      path: '/remote/.codex/skills/codexui-skill--openai--.curated%2Fopenai-docs/SKILL.md',
+                      scope: 'user',
+                      enabled: true,
+                    },
+                  ],
+                },
+              ],
+            }
+          }
+          if (method === 'codexui/skills/install') {
+            return {
+              ok: true,
+              path: '/remote/.codex/skills/codexui-skill--openai--.curated%2Fopenai-docs',
+            }
+          }
+          throw new Error(`Unexpected relay method: ${method}`)
+        },
+        onNotification() {
+          return () => {}
+        },
+      },
+    })
+    const connectorLoop = startConnectorLoop(connector)
+
+    try {
+      const browseResponse = await fetch(`${server.baseUrl}/codex-api/skills-hub?serverId=remote-openai-skills&source=openai&q=docs&limit=10`, {
+        headers: {
+          Accept: 'application/json',
+          Cookie: cookie,
+        },
+      })
+      const browsePayload = await browseResponse.json()
+      assert.equal(browseResponse.status, 200, JSON.stringify(browsePayload))
+      assert.equal(browsePayload.data?.[0]?.source, 'openai')
+      assert.equal(browsePayload.data?.[0]?.skillId, '.curated/openai-docs')
+      assert.equal(browsePayload.data?.[0]?.displayName, 'OpenAI Docs')
+      assert.equal(browsePayload.installed?.[0]?.source, 'openai')
+
+      const installResponse = await postJson(
+        `${server.baseUrl}/codex-api/skills-hub/install?serverId=remote-openai-skills`,
+        {
+          source: 'openai',
+          skillId: '.curated/openai-docs',
+          name: 'openai-docs',
+        },
+        {
+          Cookie: cookie,
+          Origin: server.baseUrl,
+        },
+      )
+      const installPayload = await installResponse.json()
+      assert.equal(installResponse.status, 200, JSON.stringify(installPayload))
+      assert.equal(installPayload.ok, true)
+      assert.ok(rpcCalls.some((call) =>
+        call.method === 'codexui/skills/install'
+        && call.params?.source === 'openai'
+        && call.params?.skillId === '.curated/openai-docs'))
+    } finally {
+      connectorLoop.stop()
+      await Promise.race([
+        connectorLoop.loop,
+        new Promise((resolvePromise) => setTimeout(resolvePromise, 200)),
+      ])
+    }
+  } finally {
+    await server.stop()
+    await skillsHub.stop()
   }
 })
 
