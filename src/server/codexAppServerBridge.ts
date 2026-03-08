@@ -12,6 +12,12 @@ import { readHubStatePayload, writeHubStatePayload } from './sqliteStore.js'
 import { OutboundRelayHub, RelayHubError } from './relay/relayHub.js'
 import { approveUser, listUsers } from './userStore.js'
 import {
+  deletePushSubscriptionForUser,
+  listPushSubscriptionsForUser,
+  upsertPushSubscriptionForUser,
+} from './pushSubscriptionStore.js'
+import { getWebPushClientConfig, sendHookPushNotificationsToUser } from './webPushService.js'
+import {
   RELAY_CHANNEL_ID_HEADER,
   RELAY_HUB_CHANNEL,
   RELAY_SERVER_ID_HEADER,
@@ -33,6 +39,10 @@ import {
   SERVER_REQUESTS_PENDING_METHOD,
   SERVER_REQUESTS_RESPOND_METHOD,
 } from '../shared/serverRequestBridge.js'
+import {
+  SERVER_SKILLS_INSTALL_METHOD,
+  SERVER_SKILLS_UNINSTALL_METHOD,
+} from '../shared/serverSkillsBridge.js'
 import { normalizeHubAddress } from '../utils/hubAddress.js'
 
 type JsonRpcCall = {
@@ -1053,20 +1063,20 @@ async function writeConnectorRegistryState(scope: ServerRegistryScope, nextState
   cachedConnectorRegistryStateByScope.set(scope.cacheKey, cloneConnectorRegistryState(normalized))
 }
 
-function listPersistedConnectorRecords(payload: Record<string, unknown>): CodexConnectorRecord[] {
-  const recordsById = new Map<string, CodexConnectorRecord>()
+function listPersistedConnectorRecords(payload: Record<string, unknown>): Array<{ scopeKey: string; connector: CodexConnectorRecord }> {
+  const recordsById = new Map<string, { scopeKey: string; connector: CodexConnectorRecord }>()
   const nowIso = new Date().toISOString()
 
   const globalRegistry = normalizeConnectorRegistryState(payload[CONNECTOR_REGISTRY_STATE_KEY], nowIso)
   for (const connector of globalRegistry.connectors) {
-    recordsById.set(connector.relayAgentId, connector)
+    recordsById.set(connector.relayAgentId, { scopeKey: 'global', connector })
   }
 
   const perUserPayload = asRecord(payload[CONNECTOR_REGISTRY_STATE_BY_USER_KEY]) ?? {}
-  for (const rawRegistry of Object.values(perUserPayload)) {
+  for (const [userId, rawRegistry] of Object.entries(perUserPayload)) {
     const registry = normalizeConnectorRegistryState(rawRegistry, nowIso)
     for (const connector of registry.connectors) {
-      recordsById.set(connector.relayAgentId, connector)
+      recordsById.set(connector.relayAgentId, { scopeKey: `user:${userId}`, connector })
     }
   }
 
@@ -1473,13 +1483,18 @@ function toPublicConnectorRecord(
 
 async function syncRelayHubPersistedAgents(relayHub: OutboundRelayHub): Promise<void> {
   const payload = await readCodexGlobalStatePayload()
-  for (const connector of listPersistedConnectorRecords(payload)) {
+  for (const entry of listPersistedConnectorRecords(payload)) {
+    const connector = entry.connector
     relayHub.upsertPersistedAgent({
       id: connector.relayAgentId,
       name: connector.name,
       ...(connector.credentialHash ? { tokenHash: connector.credentialHash } : {}),
       createdAtIso: connector.createdAtIso,
       updatedAtIso: connector.updatedAtIso,
+    })
+    relayHub.bindAgentRoute(connector.relayAgentId, {
+      scopeKey: entry.scopeKey,
+      serverId: connector.serverId,
     })
   }
 }
@@ -2428,10 +2443,26 @@ type CodexBridgeMiddleware = ((req: IncomingMessage, res: ServerResponse, next: 
 type ServerRuntime = {
   appServer: AppServerProcess
   methodCatalog: MethodCatalog
+  stopNotificationObserver?: () => void
 }
 
 class AppServerRuntimeRegistry {
   private readonly runtimesByScope = new Map<string, Map<string, ServerRuntime>>()
+  private notificationObserver: ((payload: {
+    scopeKey: string
+    serverId: string
+    notification: { method: string; params: unknown }
+  }) => void | Promise<void>) | null = null
+
+  setNotificationObserver(
+    observer: ((payload: {
+      scopeKey: string
+      serverId: string
+      notification: { method: string; params: unknown }
+    }) => void | Promise<void>) | null,
+  ): void {
+    this.notificationObserver = observer
+  }
 
   private getScopeRuntimes(scopeKey: string): Map<string, ServerRuntime> {
     const existingScope = this.runtimesByScope.get(scopeKey)
@@ -2450,6 +2481,15 @@ class AppServerRuntimeRegistry {
       appServer: new AppServerProcess(),
       methodCatalog: new MethodCatalog(),
     }
+    if (this.notificationObserver) {
+      created.stopNotificationObserver = created.appServer.onNotification((notification) => {
+        void this.notificationObserver?.({
+          scopeKey,
+          serverId,
+          notification,
+        })
+      })
+    }
     scopeRuntimes.set(serverId, created)
     return created
   }
@@ -2460,6 +2500,7 @@ class AppServerRuntimeRegistry {
 
     const runtime = scopeRuntimes.get(serverId)
     if (!runtime) return
+    runtime.stopNotificationObserver?.()
     runtime.appServer.dispose()
     scopeRuntimes.delete(serverId)
     if (scopeRuntimes.size === 0) {
@@ -2472,6 +2513,7 @@ class AppServerRuntimeRegistry {
     if (!scopeRuntimes) return
 
     for (const runtime of scopeRuntimes.values()) {
+      runtime.stopNotificationObserver?.()
       runtime.appServer.dispose()
     }
     this.runtimesByScope.delete(scopeKey)
@@ -2480,6 +2522,7 @@ class AppServerRuntimeRegistry {
   disposeAll(): void {
     for (const scopeRuntimes of this.runtimesByScope.values()) {
       for (const runtime of scopeRuntimes.values()) {
+        runtime.stopNotificationObserver?.()
         runtime.appServer.dispose()
       }
     }
@@ -2610,6 +2653,28 @@ function getSharedBridgeState(): SharedBridgeState {
   }
   globalScope[SHARED_BRIDGE_KEY] = created
   return created
+}
+
+function parseUserIdFromScopeKey(scopeKey: string): string {
+  return scopeKey.startsWith('user:') ? scopeKey.slice('user:'.length).trim() : ''
+}
+
+function readHookEventRequestId(params: unknown): number | null {
+  const record = asRecord(params)
+  const id = record?.id
+  return typeof id === 'number' && Number.isInteger(id) ? id : null
+}
+
+function readHookEventThreadId(params: unknown): string {
+  const record = asRecord(params)
+  const threadId = record?.threadId
+  return typeof threadId === 'string' ? threadId.trim() : ''
+}
+
+function readHookEventCommand(params: unknown): string {
+  const record = asRecord(params)
+  const command = record?.command
+  return typeof command === 'string' ? command.trim() : ''
 }
 
 type ServerTransportConfig = {
@@ -2757,6 +2822,51 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
   const relayRateLimitByClientKey = new Map<string, RelayEndpointRateLimitRecord>()
   const bootstrapExchangeRateLimitByIp = new Map<string, RelayEndpointRateLimitRecord>()
   const bootstrapExchangeRateLimitByClientKey = new Map<string, RelayEndpointRateLimitRecord>()
+  const deliveredHookNotifications = new Map<string, string>()
+
+  async function notifyHookEvent(
+    scopeKey: string,
+    serverId: string,
+    notification: { method: string; params: unknown },
+  ): Promise<void> {
+    const userId = parseUserIdFromScopeKey(scopeKey)
+    if (!userId) return
+
+    const requestId = readHookEventRequestId(notification.params)
+    if (requestId === null) return
+
+    const eventKey = `${scopeKey}:${serverId}:${String(requestId)}`
+    if (notification.method === 'server/request/resolved') {
+      deliveredHookNotifications.delete(eventKey)
+      return
+    }
+    if (notification.method !== 'server/request' || deliveredHookNotifications.has(eventKey)) {
+      return
+    }
+    deliveredHookNotifications.set(eventKey, new Date().toISOString())
+
+    const threadId = readHookEventThreadId(notification.params)
+    const command = readHookEventCommand(notification.params)
+    await sendHookPushNotificationsToUser(userId, {
+      title: command ? `Approval needed: ${command}` : 'Connector hook approval required',
+      body: command
+        ? `A connector on ${serverId} is waiting to run “${command}”.`
+        : `A connector on ${serverId} is waiting for your approval.`,
+      url: threadId ? `/thread/${encodeURIComponent(threadId)}` : '/hooks',
+      tag: `hook:${serverId}:${String(requestId)}`,
+      badgeCount: 1,
+      serverLabel: serverId,
+      command,
+    })
+  }
+
+  runtimeRegistry.setNotificationObserver((payload) => notifyHookEvent(payload.scopeKey, payload.serverId, payload.notification))
+  relayHub.setEventObserver((event) => {
+    void notifyHookEvent(event.route.scopeKey, event.route.serverId, {
+      method: event.event,
+      params: event.params,
+    })
+  })
 
   function enforceRelayRateLimit(req: IncomingMessage, res: ServerResponse): boolean {
     const decision = consumeRelayEndpointRateLimit(req, relayRateLimitByIp, relayRateLimitByClientKey)
@@ -2864,6 +2974,98 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/codex-api/pwa/config') {
+        const authenticatedUser = getRequestAuthenticatedUser(req)
+        if (!authenticatedUser) {
+          setJson(res, 401, { error: 'Authentication required' })
+          return
+        }
+
+        setJson(res, 200, {
+          data: getWebPushClientConfig(),
+        })
+        return
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/pwa/subscriptions') {
+        const authenticatedUser = getRequestAuthenticatedUser(req)
+        if (!authenticatedUser) {
+          setJson(res, 401, { error: 'Authentication required' })
+          return
+        }
+
+        const subscriptions = listPushSubscriptionsForUser(authenticatedUser.id).map((subscription) => ({
+          endpoint: subscription.endpoint,
+          createdAtIso: subscription.createdAtIso,
+          updatedAtIso: subscription.updatedAtIso,
+          failureCount: subscription.failureCount,
+          ...(subscription.platform ? { platform: subscription.platform } : {}),
+          ...(subscription.userAgent ? { userAgent: subscription.userAgent } : {}),
+          ...(subscription.lastSuccessAtIso ? { lastSuccessAtIso: subscription.lastSuccessAtIso } : {}),
+          ...(subscription.lastFailureAtIso ? { lastFailureAtIso: subscription.lastFailureAtIso } : {}),
+        }))
+        setJson(res, 200, {
+          data: {
+            subscriptions,
+          },
+        })
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/pwa/subscriptions') {
+        const authenticatedUser = getRequestAuthenticatedUser(req)
+        if (!authenticatedUser) {
+          setJson(res, 401, { error: 'Authentication required' })
+          return
+        }
+
+        const payload = asRecord(await readJsonBody(req))
+        const subscription = asRecord(payload?.subscription)
+        if (!subscription) {
+          setJson(res, 400, { error: 'Push subscription payload is required.' })
+          return
+        }
+
+        try {
+          const stored = upsertPushSubscriptionForUser(authenticatedUser.id, {
+            endpoint: typeof subscription.endpoint === 'string' ? subscription.endpoint : '',
+            subscription,
+            platform: typeof payload?.platform === 'string' ? payload.platform : '',
+            userAgent: typeof payload?.userAgent === 'string' ? payload.userAgent : '',
+          })
+          setJson(res, 201, {
+            data: {
+              endpoint: stored.endpoint,
+              createdAtIso: stored.createdAtIso,
+              updatedAtIso: stored.updatedAtIso,
+              ...(stored.platform ? { platform: stored.platform } : {}),
+              ...(stored.userAgent ? { userAgent: stored.userAgent } : {}),
+            },
+          })
+        } catch (error) {
+          setJson(res, 400, { error: getErrorMessage(error, 'Failed to save push subscription') })
+        }
+        return
+      }
+
+      if (req.method === 'DELETE' && url.pathname === '/codex-api/pwa/subscriptions') {
+        const authenticatedUser = getRequestAuthenticatedUser(req)
+        if (!authenticatedUser) {
+          setJson(res, 401, { error: 'Authentication required' })
+          return
+        }
+
+        const payload = asRecord(await readJsonBody(req))
+        const endpoint = typeof payload?.endpoint === 'string' ? payload.endpoint.trim() : ''
+        if (!endpoint) {
+          setJson(res, 400, { error: 'Subscription endpoint is required.' })
+          return
+        }
+        deletePushSubscriptionForUser(authenticatedUser.id, endpoint)
+        setJson(res, 200, { ok: true })
+        return
+      }
+
       if (req.method === 'POST' && url.pathname === '/codex-api/connectors') {
         const authenticatedUser = getRequestAuthenticatedUser(req)
         if (!authenticatedUser) {
@@ -2945,6 +3147,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           name: connector.name,
           createdAtIso: connector.createdAtIso,
           updatedAtIso: connector.updatedAtIso,
+        })
+        relayHub.bindAgentRoute(connector.relayAgentId, {
+          scopeKey: registryScope.cacheKey,
+          serverId: connector.serverId,
         })
         setJson(res, 201, {
           data: {
@@ -3847,14 +4053,21 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'POST' && url.pathname === '/codex-api/skills-hub/install') {
         try {
-          requireLoopbackForSensitiveMutation(req, 'Skills installation')
           const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
           if (resolved.server.transport === 'relay') {
-            setJson(res, 409, {
-              error: 'Connector-scoped skill installation is not available from the Hub yet. Install the skill directly on the connector host.',
-            })
+            const payload = asRecord(await readJsonBody(req))
+            const owner = typeof payload?.owner === 'string' ? payload.owner : ''
+            const name = typeof payload?.name === 'string' ? payload.name : ''
+            const result = await dispatchServerScopedBridgeMethod(
+              resolved,
+              SERVER_SKILLS_INSTALL_METHOD,
+              { owner, name },
+              relayHub,
+            )
+            setJson(res, 200, result)
             return
           }
+          requireLoopbackForSensitiveMutation(req, 'Skills installation')
           const runtime = requireLocalRuntime(resolved, 'Skills installation')
           const payload = asRecord(await readJsonBody(req))
           const owner = typeof payload?.owner === 'string' ? payload.owner : ''
@@ -3879,14 +4092,20 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
       if (req.method === 'POST' && url.pathname === '/codex-api/skills-hub/uninstall') {
         try {
-          requireLoopbackForSensitiveMutation(req, 'Skills uninstall')
           const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
           if (resolved.server.transport === 'relay') {
-            setJson(res, 409, {
-              error: 'Connector-scoped skill uninstall is not available from the Hub yet. Remove the skill directly on the connector host.',
-            })
+            const payload = asRecord(await readJsonBody(req))
+            const name = typeof payload?.name === 'string' ? payload.name : ''
+            const result = await dispatchServerScopedBridgeMethod(
+              resolved,
+              SERVER_SKILLS_UNINSTALL_METHOD,
+              { name },
+              relayHub,
+            )
+            setJson(res, 200, result)
             return
           }
+          requireLoopbackForSensitiveMutation(req, 'Skills uninstall')
           const runtime = requireLocalRuntime(resolved, 'Skills uninstall')
           const payload = asRecord(await readJsonBody(req))
           const name = typeof payload?.name === 'string' ? payload.name : ''

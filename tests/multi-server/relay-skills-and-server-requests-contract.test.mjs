@@ -430,6 +430,99 @@ test('relay-backed skills hub uses the selected connector instead of returning 5
   }
 })
 
+test('relay-backed skill install and uninstall run on the selected connector host', async () => {
+  const server = await startServer({ password: 'relay-skills-install-bootstrap-1' })
+  const connectorModule = await loadConnectorModule()
+
+  try {
+    const cookie = await loginAndCompleteBootstrap(
+      server.baseUrl,
+      'relay-admin',
+      'relay-skills-install-bootstrap-1',
+      'relay-skills-install-admin',
+      'relay-skills-install-bootstrap-2',
+    )
+    const credentialToken = await createConnectorCredential(server.baseUrl, cookie, 'remote-skills-install')
+    const rpcCalls = []
+
+    const transport = new connectorModule.HttpRelayHubTransport(server.baseUrl, { allowInsecureHttp: true })
+    const connector = new connectorModule.CodexRelayConnector({
+      token: credentialToken,
+      transport,
+      connectorId: 'remote-skills-install',
+      pollWaitMs: 50,
+      notificationFlushDelayMs: 0,
+      appServer: {
+        async rpc(method, params) {
+          rpcCalls.push({ method, params })
+          if (method === 'codexui/skills/install') {
+            return {
+              ok: true,
+              path: '/remote/.codex/skills/docker-toolkit',
+            }
+          }
+          if (method === 'codexui/skills/uninstall') {
+            return {
+              ok: true,
+              deletedPath: '/remote/.codex/skills/docker-toolkit',
+            }
+          }
+          if (method === 'skills/list') {
+            return { data: [] }
+          }
+          throw new Error(`Unexpected relay method: ${method}`)
+        },
+        onNotification() {
+          return () => {}
+        },
+      },
+    })
+    const connectorLoop = startConnectorLoop(connector)
+
+    try {
+      const installResponse = await postJson(
+        `${server.baseUrl}/codex-api/skills-hub/install?serverId=remote-skills-install`,
+        {
+          owner: 'openclaw',
+          name: 'docker-toolkit',
+        },
+        {
+          Cookie: cookie,
+          Origin: server.baseUrl,
+        },
+      )
+      const installPayload = await installResponse.json()
+      assert.equal(installResponse.status, 200, JSON.stringify(installPayload))
+      assert.equal(installPayload.ok, true)
+      assert.equal(installPayload.path, '/remote/.codex/skills/docker-toolkit')
+
+      const uninstallResponse = await postJson(
+        `${server.baseUrl}/codex-api/skills-hub/uninstall?serverId=remote-skills-install`,
+        {
+          name: 'docker-toolkit',
+        },
+        {
+          Cookie: cookie,
+          Origin: server.baseUrl,
+        },
+      )
+      const uninstallPayload = await uninstallResponse.json()
+      assert.equal(uninstallResponse.status, 200, JSON.stringify(uninstallPayload))
+      assert.equal(uninstallPayload.ok, true)
+      assert.ok(rpcCalls.some((call) => call.method === 'codexui/skills/install'))
+      assert.ok(rpcCalls.some((call) => call.method === 'codexui/skills/uninstall'))
+    } finally {
+      connectorLoop.stop()
+      await Promise.race([
+        connectorLoop.loop,
+        new Promise((resolvePromise) => setTimeout(resolvePromise, 200)),
+      ])
+    }
+  } finally {
+    await server.stop()
+  }
+})
+
 test('relay-backed pending server requests can be hydrated and replied to', async () => {
   const server = await startServer({ password: 'relay-hooks-bootstrap-1' })
   const connectorModule = await loadConnectorModule()

@@ -4,6 +4,10 @@ import {
   SERVER_REQUESTS_PENDING_METHOD,
   SERVER_REQUESTS_RESPOND_METHOD,
 } from '../shared/serverRequestBridge.js'
+import {
+  SERVER_SKILLS_INSTALL_METHOD,
+  SERVER_SKILLS_UNINSTALL_METHOD,
+} from '../shared/serverSkillsBridge.js'
 
 export class CodexUiConnectorAppServer implements RelayConnectorAppServer {
   private readonly delegate: RelayConnectorAppServer
@@ -13,6 +17,9 @@ export class CodexUiConnectorAppServer implements RelayConnectorAppServer {
   }
 
   async rpc(method: string, params: unknown): Promise<unknown> {
+    if (method === 'codexui/relay/bootstrap') {
+      return { ok: true }
+    }
     if (isServerFsBridgeMethod(method)) {
       return await executeServerFsBridgeMethod(method, params)
     }
@@ -34,6 +41,26 @@ export class CodexUiConnectorAppServer implements RelayConnectorAppServer {
       ).respondToServerRequest
       if (typeof respondToServerRequest === 'function') {
         return await respondToServerRequest.call(this.delegate, params)
+      }
+    }
+    if (method === SERVER_SKILLS_INSTALL_METHOD) {
+      const installSkillFromHub = (
+        this.delegate as RelayConnectorAppServer & {
+          installSkillFromHub?: (payload: unknown) => Promise<unknown>
+        }
+      ).installSkillFromHub
+      if (typeof installSkillFromHub === 'function') {
+        return await installSkillFromHub.call(this.delegate, params)
+      }
+    }
+    if (method === SERVER_SKILLS_UNINSTALL_METHOD) {
+      const uninstallSkillFromHub = (
+        this.delegate as RelayConnectorAppServer & {
+          uninstallSkillFromHub?: (payload: unknown) => Promise<unknown>
+        }
+      ).uninstallSkillFromHub
+      if (typeof uninstallSkillFromHub === 'function') {
+        return await uninstallSkillFromHub.call(this.delegate, params)
       }
     }
     return await this.delegate.rpc(method, params)

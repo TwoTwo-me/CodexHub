@@ -225,7 +225,7 @@ test('sidebar shows hook alerts and lifts the newest hooked project to the top',
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(1500)
 
-  await expect(page.getByRole('button', { name: /Hooks/i })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Hooks/i })).toBeVisible()
   await expect(page.locator('.hook-alert-dot[data-scope="server"]')).toBeVisible()
   await expect(page.locator('[data-project-name="project-bravo"] .hook-alert-dot[data-scope="project"]')).toBeVisible()
 
@@ -244,7 +244,7 @@ test('hook inbox lists newest hooks first and opens the matching thread', async 
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(1500)
 
-  await page.getByRole('button', { name: /Hooks/i }).click()
+  await page.getByRole('button', { name: /^Hooks/i }).click()
   await expect(page.getByRole('heading', { name: 'Pending hooks' })).toBeVisible()
 
   const rows = page.locator('.hook-inbox-item')

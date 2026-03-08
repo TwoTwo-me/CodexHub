@@ -355,6 +355,7 @@ const isSidebarCollapsed = ref(loadSidebarCollapsed())
 const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
 const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
+const lastAnnouncedPendingHookCount = ref(0)
 
 const routeThreadId = computed(() => {
   const rawThreadId = route.params.threadId
@@ -731,6 +732,40 @@ watch(isMobile, (mobile) => {
     setSidebarCollapsed(true)
   }
 })
+
+watch(
+  () => pendingHookCount.value,
+  (count) => {
+    if (!hasInitialized.value) {
+      lastAnnouncedPendingHookCount.value = count
+      return
+    }
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
+      lastAnnouncedPendingHookCount.value = count
+      return
+    }
+    if (count <= lastAnnouncedPendingHookCount.value) {
+      lastAnnouncedPendingHookCount.value = count
+      return
+    }
+
+    const latestHook = hookInboxEntries.value[0]
+    const notification = new Notification(
+      count === 1 ? '1 pending approval requires attention' : `${String(count)} pending approvals require attention`,
+      {
+        body: latestHook
+          ? `${latestHook.projectLabel} · ${latestHook.threadTitle}`
+          : 'Open the Hooks page to review pending approvals.',
+        tag: 'codexui-pending-hooks',
+      },
+    )
+    notification.onclick = () => {
+      window.focus()
+      void router.push(latestHook ? { name: 'thread', params: { threadId: latestHook.threadId } } : { name: 'hooks' })
+    }
+    lastAnnouncedPendingHookCount.value = count
+  },
+)
 
 async function submitFirstMessageForNewThread(
   text: string,

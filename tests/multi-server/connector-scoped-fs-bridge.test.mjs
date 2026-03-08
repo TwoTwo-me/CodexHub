@@ -324,7 +324,7 @@ test('server-scoped filesystem endpoints dispatch to the selected connector inst
     const composerBody = await composerResponse.json()
     assert.deepEqual(composerBody.data, [{ path: 'src/remote-entry.ts' }])
 
-    assert.deepEqual(rpcCalls.map((entry) => entry.method), [
+    assert.deepEqual(rpcCalls.map((entry) => entry.method).filter((method) => method !== 'codexui/relay/bootstrap'), [
       'codexui/fs/list',
       'codexui/project-root-suggestion',
       'codexui/composer-file-search',

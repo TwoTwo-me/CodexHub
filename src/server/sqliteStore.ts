@@ -113,12 +113,32 @@ function ensureStateEntriesTable(database: SqliteDatabase): void {
   `)
 }
 
+function ensurePushSubscriptionsTable(database: SqliteDatabase): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      endpoint TEXT NOT NULL UNIQUE,
+      subscription_json TEXT NOT NULL,
+      user_agent TEXT,
+      platform TEXT,
+      created_at_iso TEXT NOT NULL,
+      updated_at_iso TEXT NOT NULL,
+      last_success_at_iso TEXT,
+      last_failure_at_iso TEXT,
+      failure_count INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS push_subscriptions_user_id_idx ON push_subscriptions(user_id);
+  `)
+}
+
 function initializeDatabase(database: SqliteDatabase): void {
   database.pragma('journal_mode = WAL')
   database.pragma('foreign_keys = ON')
   ensureMetadataTable(database)
   ensureUsersTable(database)
   ensureStateEntriesTable(database)
+  ensurePushSubscriptionsTable(database)
 }
 
 export function getHubDatabase(): SqliteDatabase {

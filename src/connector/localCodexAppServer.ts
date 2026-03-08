@@ -1,5 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { cp, mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import type { BridgePendingServerRequest, BridgeServerRequestReply } from '../shared/serverRequestBridge.js'
+import type { BridgeSkillInstallPayload, BridgeSkillUninstallPayload } from '../shared/serverSkillsBridge.js'
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -123,6 +127,120 @@ export class LocalCodexAppServer {
     for (const listener of this.notificationListeners) {
       listener(notification)
     }
+  }
+
+  private getCodexHomeDir(): string {
+    const codexHome = process.env.CODEX_HOME?.trim()
+    return codexHome && codexHome.length > 0 ? codexHome : join(homedir(), '.codex')
+  }
+
+  private getSkillsInstallDir(): string {
+    return join(this.getCodexHomeDir(), 'skills')
+  }
+
+  private async runCommand(command: string, args: string[], cwd?: string): Promise<void> {
+    await new Promise<void>((resolvePromise, reject) => {
+      const proc = spawn(command, args, {
+        cwd,
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let stdout = ''
+      let stderr = ''
+      proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
+      proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+      proc.on('error', reject)
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolvePromise()
+          return
+        }
+        const details = [stderr.trim(), stdout.trim()].filter(Boolean).join('\n')
+        reject(new Error(details.length > 0 ? details : `Command failed: ${command}`))
+      })
+    })
+  }
+
+  private async detectUserSkillsDir(): Promise<string> {
+    try {
+      const result = (await this.rpc('skills/list', {})) as {
+        data?: Array<{ skills?: Array<{ scope?: string; path?: string }> }>
+      }
+      for (const entry of result.data ?? []) {
+        for (const skill of entry.skills ?? []) {
+          if (skill.scope !== 'user' || !skill.path) continue
+          const normalizedPath = skill.path.split('/').filter(Boolean)
+          if (normalizedPath.length < 2) continue
+          return `/${normalizedPath.slice(0, -2).join('/')}`
+        }
+      }
+    } catch {}
+    return this.getSkillsInstallDir()
+  }
+
+  private async ensureInstalledSkillIsValid(skillPath: string): Promise<void> {
+    const result = (await this.rpc('skills/list', { forceReload: true })) as {
+      data?: Array<{ errors?: Array<{ path?: string; message?: string }> }>
+    }
+    const normalized = skillPath.endsWith('/SKILL.md') ? skillPath : `${skillPath}/SKILL.md`
+    for (const entry of result.data ?? []) {
+      for (const error of entry.errors ?? []) {
+        if (error.path === normalized) {
+          throw new Error(error.message || 'Installed skill is invalid')
+        }
+      }
+    }
+  }
+
+  async installSkillFromHub(payload: BridgeSkillInstallPayload): Promise<{ ok: true; path: string }> {
+    await this.ensureInitialized()
+    const owner = typeof payload?.owner === 'string' ? payload.owner.trim() : ''
+    const name = typeof payload?.name === 'string' ? payload.name.trim() : ''
+    if (!owner || !name) {
+      throw new Error('Missing owner or name')
+    }
+
+    const repoDir = await mkdtemp(join(tmpdir(), 'codexui-skill-installer-'))
+    const sparsePath = `skills/${owner}/${name}`
+    try {
+      await this.runCommand('git', [
+        'clone',
+        '--depth', '1',
+        '--filter=blob:none',
+        '--sparse',
+        'https://github.com/openclaw/skills.git',
+        repoDir,
+      ])
+      await this.runCommand('git', ['sparse-checkout', 'set', sparsePath], repoDir)
+      const installDest = await this.detectUserSkillsDir()
+      const sourceDir = join(repoDir, 'skills', owner, name)
+      const targetDir = join(installDest, name)
+      await rm(targetDir, { recursive: true, force: true })
+      await mkdir(installDest, { recursive: true })
+      await cp(sourceDir, targetDir, { recursive: true })
+      await this.ensureInstalledSkillIsValid(targetDir)
+      return { ok: true, path: targetDir }
+    } finally {
+      await rm(repoDir, { recursive: true, force: true }).catch(() => {})
+    }
+  }
+
+  async uninstallSkillFromHub(payload: BridgeSkillUninstallPayload): Promise<{ ok: true; deletedPath: string }> {
+    await this.ensureInitialized()
+    const name = typeof payload?.name === 'string' ? payload.name.trim() : ''
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name)) {
+      throw new Error('Invalid skill name')
+    }
+    const skillsRoot = resolve(this.getSkillsInstallDir())
+    const target = join(skillsRoot, name)
+    if (!target.startsWith(`${skillsRoot}/`) && target !== skillsRoot) {
+      throw new Error('Refusing to delete outside skills directory')
+    }
+    await rm(target, { recursive: true, force: true })
+    try {
+      await this.rpc('skills/list', { forceReload: true })
+    } catch {}
+    return { ok: true, deletedPath: target }
   }
 
   private sendServerRequestReply(requestId: number, reply: { result?: unknown; error?: { code: number; message: string } }): void {

@@ -190,6 +190,50 @@
       </section>
     </div>
 
+    <section class="settings-card settings-notifications-card">
+      <div class="settings-card-header">
+        <div>
+          <h3 class="settings-card-title">Browser notifications</h3>
+          <p class="settings-card-subtitle">
+            Register this browser as a PWA-capable notification target for hook approvals on Android, iPhone home screen web apps, and desktop browsers.
+          </p>
+        </div>
+      </div>
+
+      <div class="settings-status-meta">
+        <p>{{ browserNotificationSupportMessage }}</p>
+        <p>{{ browserNotificationPermissionMessage }}</p>
+        <p v-if="browserSubscription">Subscribed endpoint saved at {{ browserSubscription.updatedAtIso || browserSubscription.createdAtIso }}</p>
+        <p v-else>No browser subscription stored for this device yet.</p>
+      </div>
+
+      <div class="settings-action-row">
+        <button
+          type="button"
+          class="settings-primary-button"
+          :disabled="!isBrowserNotificationsSupported || isEnablingBrowserNotifications"
+          @click="void enableNotifications()"
+        >
+          {{ isEnablingBrowserNotifications ? 'Enabling…' : 'Enable notifications' }}
+        </button>
+        <button
+          type="button"
+          class="settings-secondary-button"
+          :disabled="!browserSubscription || isDisablingBrowserNotifications"
+          @click="void disableNotifications()"
+        >
+          {{ isDisablingBrowserNotifications ? 'Disabling…' : 'Disable notifications' }}
+        </button>
+      </div>
+
+      <p v-if="browserNotificationStatusMessage" class="settings-inline-status">
+        {{ browserNotificationStatusMessage }}
+      </p>
+      <p class="settings-field-help">
+        iPhone push requires adding the Hub to the Home Screen and opening it as a standalone web app before enabling notifications.
+      </p>
+    </section>
+
     <section v-if="selectedInstallArtifact" class="settings-card settings-install-card">
       <div class="settings-card-header">
         <div>
@@ -238,6 +282,12 @@ import {
   rotateConnectorRegistrationToken,
   type CodexConnectorInfo,
 } from '../../api/codexGateway'
+import {
+  disableBrowserNotifications,
+  enableBrowserNotifications,
+  getStoredBrowserSubscriptions,
+  isBrowserNotificationSupported,
+} from '../../api/pwaGateway'
 import { createConnectorInstallCommand } from '../../shared/connectorInstallCommand'
 
 const emit = defineEmits<{
@@ -262,6 +312,19 @@ const errorMessage = ref('')
 const renameDraft = ref('')
 const pendingDeleteConnectorId = ref('')
 const latestInstallArtifact = ref<InstallArtifact | null>(null)
+const browserSubscriptions = ref<Array<{
+  endpoint: string
+  createdAtIso: string
+  updatedAtIso: string
+  failureCount?: number
+  platform?: string
+  userAgent?: string
+  lastSuccessAtIso?: string
+  lastFailureAtIso?: string
+}>>([])
+const isEnablingBrowserNotifications = ref(false)
+const isDisablingBrowserNotifications = ref(false)
+const browserNotificationStatusMessage = ref('')
 
 const createForm = reactive({
   name: '',
@@ -291,6 +354,27 @@ const selectedInstallCommand = computed(() => {
     bootstrapToken: isTokenRevealed.value ? artifact.token : '',
     ...(artifact.connector.relayE2eeKeyId ? { relayE2eeKeyId: artifact.connector.relayE2eeKeyId } : {}),
   })
+})
+
+const isBrowserNotificationsSupported = computed(() => isBrowserNotificationSupported())
+const browserSubscription = computed(() => browserSubscriptions.value[0] ?? null)
+const browserNotificationSupportMessage = computed(() => (
+  isBrowserNotificationsSupported.value
+    ? 'This browser can receive push notifications through the Hub PWA service worker.'
+    : 'This browser does not expose the Service Worker Push APIs required for Hub notifications.'
+))
+const browserNotificationPermissionMessage = computed(() => {
+  if (typeof Notification === 'undefined') {
+    return 'Notification permission is unavailable in this environment.'
+  }
+  switch (Notification.permission) {
+    case 'granted':
+      return 'Notification permission has been granted for this browser.'
+    case 'denied':
+      return 'Notification permission was denied. Update the browser site settings to re-enable it.'
+    default:
+      return 'Notification permission has not been requested yet.'
+  }
 })
 
 function normalizeSelection(nextRows: CodexConnectorInfo[]): void {
@@ -390,6 +474,20 @@ async function refreshConnectors(): Promise<void> {
     selectedConnectorId.value = ''
   } finally {
     isLoading.value = false
+  }
+}
+
+async function refreshBrowserSubscriptions(): Promise<void> {
+  if (!isBrowserNotificationsSupported.value) {
+    browserSubscriptions.value = []
+    return
+  }
+  try {
+    browserSubscriptions.value = await getStoredBrowserSubscriptions()
+  } catch (error) {
+    browserNotificationStatusMessage.value = error instanceof Error
+      ? error.message
+      : 'Failed to load browser notification subscriptions'
   }
 }
 
@@ -493,8 +591,44 @@ async function confirmDelete(): Promise<void> {
   }
 }
 
+async function enableNotifications(): Promise<void> {
+  if (!isBrowserNotificationsSupported.value || isEnablingBrowserNotifications.value) return
+  isEnablingBrowserNotifications.value = true
+  browserNotificationStatusMessage.value = ''
+  try {
+    const stored = await enableBrowserNotifications()
+    browserSubscriptions.value = [stored]
+    browserNotificationStatusMessage.value = 'Notifications enabled for this browser.'
+  } catch (error) {
+    browserNotificationStatusMessage.value = error instanceof Error
+      ? error.message
+      : 'Failed to enable browser notifications'
+  } finally {
+    isEnablingBrowserNotifications.value = false
+  }
+}
+
+async function disableNotifications(): Promise<void> {
+  const subscription = browserSubscription.value
+  if (!subscription || isDisablingBrowserNotifications.value) return
+  isDisablingBrowserNotifications.value = true
+  browserNotificationStatusMessage.value = ''
+  try {
+    await disableBrowserNotifications(subscription.endpoint)
+    browserSubscriptions.value = []
+    browserNotificationStatusMessage.value = 'Notifications disabled for this browser.'
+  } catch (error) {
+    browserNotificationStatusMessage.value = error instanceof Error
+      ? error.message
+      : 'Failed to disable browser notifications'
+  } finally {
+    isDisablingBrowserNotifications.value = false
+  }
+}
+
 onMounted(() => {
   void refreshConnectors()
+  void refreshBrowserSubscriptions()
 })
 </script>
 
@@ -671,6 +805,10 @@ onMounted(() => {
   @apply mt-1;
 }
 
+.settings-notifications-card {
+  @apply mt-1;
+}
+
 .settings-install-once {
   @apply m-0 text-sm font-medium text-zinc-700;
 }
@@ -689,5 +827,9 @@ onMounted(() => {
 
 .settings-field-help {
   @apply m-0 text-xs leading-5 text-zinc-500;
+}
+
+.settings-inline-status {
+  @apply m-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700;
 }
 </style>

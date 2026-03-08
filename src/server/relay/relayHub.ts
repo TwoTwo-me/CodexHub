@@ -65,6 +65,7 @@ type RelayRoute = {
 }
 
 type RelayNotificationListener = (event: RelayEventEnvelope & { agentId: string }) => void
+type RelayEventObserver = (event: RelayEventEnvelope & { agentId: string }) => void
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -149,6 +150,20 @@ export class OutboundRelayHub {
   private readonly pendingRpcCountByAgentId = new Map<string, number>()
   private readonly listenersByRouteKey = new Map<string, Set<RelayNotificationListener>>()
   private readonly allowedRoutesByAgentId = new Map<string, Set<string>>()
+  private readonly defaultRouteByAgentId = new Map<string, { scopeKey: string; serverId: string }>()
+  private eventObserver: RelayEventObserver | null = null
+
+  setEventObserver(observer: RelayEventObserver | null): void {
+    this.eventObserver = observer
+  }
+
+  bindAgentRoute(agentId: string, route: { scopeKey: string; serverId: string }): void {
+    if (!route.scopeKey.trim() || !route.serverId.trim()) return
+    this.defaultRouteByAgentId.set(agentId, {
+      scopeKey: route.scopeKey.trim(),
+      serverId: route.serverId.trim(),
+    })
+  }
 
   listAgents(): RelayAgentPublicRecord[] {
     return Array.from(this.agentsById.values())
@@ -299,6 +314,24 @@ export class OutboundRelayHub {
 
     matchedAgent.updatedAtIso = nowIso
     matchedAgent.lastSeenAtIso = nowIso
+
+    const defaultRoute = this.defaultRouteByAgentId.get(matchedAgent.id)
+    if (defaultRoute) {
+      session.queue.push({
+        protocol: RELAY_PROTOCOL,
+        version: RELAY_PROTOCOL_VERSION,
+        kind: 'request',
+        relayId: createRelayId(),
+        route: {
+          scopeKey: defaultRoute.scopeKey,
+          serverId: defaultRoute.serverId,
+          channelId: toAgentChannelId(matchedAgent.id),
+        },
+        method: 'codexui/relay/bootstrap',
+        params: null,
+        sentAtIso: nowIso,
+      })
+    }
 
     return {
       sessionId: session.sessionId,
@@ -591,9 +624,13 @@ export class OutboundRelayHub {
     }
 
     const routeKey = toRouteKey({ scopeKey, serverId })
-    const allowedRoutes = this.allowedRoutesByAgentId.get(agentId)
-    if (!allowedRoutes || !allowedRoutes.has(routeKey)) {
-      return false
+    const allowedRoutes = this.allowedRoutesByAgentId.get(agentId) ?? new Set<string>()
+    if (!allowedRoutes.has(routeKey)) {
+      if (allowedRoutes.size >= MAX_ALLOWED_ROUTES_PER_AGENT) {
+        return false
+      }
+      allowedRoutes.add(routeKey)
+      this.allowedRoutesByAgentId.set(agentId, allowedRoutes)
     }
 
     const eventName = typeof record.event === 'string' && record.event.trim().length > 0
@@ -618,6 +655,8 @@ export class OutboundRelayHub {
       sentAtIso,
       agentId,
     }
+
+    this.eventObserver?.(envelope)
 
     const listeners = this.listenersByRouteKey.get(routeKey)
     if (!listeners || listeners.size === 0) return true
