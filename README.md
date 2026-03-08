@@ -266,6 +266,7 @@ Useful environment variables:
 - [`docs/bootstrap-admin-setup-report.md`](docs/bootstrap-admin-setup-report.md) — hash-only bootstrap and forced first-login rotation report
 - [`docs/explorer-hooks-sqlite-approval-report.md`](docs/explorer-hooks-sqlite-approval-report.md) — server-scoped explorer, hook inbox, SQLite auth, and approval flow report
 - [`docs/skills-hub-hooks-pwa-report.md`](docs/skills-hub-hooks-pwa-report.md) — connector-scoped Skills Hub, relay hook fixes, PWA notifications, and live Docker validation
+- [`docs/hub-managed-connector-updates-report.md`](docs/hub-managed-connector-updates-report.md) — package-managed connector telemetry, update jobs, stable runner scripts, and Settings update controls
 - [`docs/implementation-report.md`](docs/implementation-report.md) — phase-by-phase implementation summary
 - [`docs/connector-bootstrap-hardening-report.md`](docs/connector-bootstrap-hardening-report.md) — connector bootstrap hardening details
 - [`docs/multi-server-test-workflow.md`](docs/multi-server-test-workflow.md) — disposable multi-server Docker lab stack
