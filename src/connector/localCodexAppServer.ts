@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { cp, mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { BridgePendingServerRequest, BridgeServerRequestReply } from '../shared/serverRequestBridge.js'
@@ -33,6 +33,8 @@ export class LocalCodexAppServer {
   private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }>()
   private readonly pendingServerRequests = new Map<number, BridgePendingServerRequest>()
   private readonly notificationListeners = new Set<(value: { method: string; params: unknown }) => void>()
+  private methodCatalogCache: string[] | null = null
+  private notificationCatalogCache: string[] | null = null
 
   constructor(command = 'codex') {
     this.command = command
@@ -161,6 +163,31 @@ export class LocalCodexAppServer {
     })
   }
 
+  private async runGenerateSchemaCommand(outDir: string): Promise<void> {
+    await this.runCommand(this.command, ['app-server', 'generate-json-schema', '--out', outDir])
+  }
+
+  private extractMethodsFromSchema(payload: unknown): string[] {
+    const root = asRecord(payload)
+    const oneOf = Array.isArray(root?.oneOf) ? root.oneOf : []
+    const methods = new Set<string>()
+
+    for (const entry of oneOf) {
+      const row = asRecord(entry)
+      const properties = asRecord(row?.properties)
+      const methodDef = asRecord(properties?.method)
+      const methodEnum = Array.isArray(methodDef?.enum) ? methodDef.enum : []
+
+      for (const item of methodEnum) {
+        if (typeof item === 'string' && item.length > 0) {
+          methods.add(item)
+        }
+      }
+    }
+
+    return Array.from(methods).sort((a, b) => a.localeCompare(b))
+  }
+
   private async detectUserSkillsDir(): Promise<string> {
     try {
       const result = (await this.rpc('skills/list', {})) as {
@@ -222,6 +249,34 @@ export class LocalCodexAppServer {
       return { ok: true, path: targetDir }
     } finally {
       await rm(repoDir, { recursive: true, force: true }).catch(() => {})
+    }
+  }
+
+  async listMethods(): Promise<string[]> {
+    if (this.methodCatalogCache) return this.methodCatalogCache
+    const outDir = await mkdtemp(join(tmpdir(), 'codexui-schema-'))
+    try {
+      await this.runGenerateSchemaCommand(outDir)
+      const parsed = JSON.parse(await readFile(join(outDir, 'ClientRequest.json'), 'utf8')) as unknown
+      const methods = this.extractMethodsFromSchema(parsed)
+      this.methodCatalogCache = methods
+      return methods
+    } finally {
+      await rm(outDir, { recursive: true, force: true }).catch(() => {})
+    }
+  }
+
+  async listNotificationMethods(): Promise<string[]> {
+    if (this.notificationCatalogCache) return this.notificationCatalogCache
+    const outDir = await mkdtemp(join(tmpdir(), 'codexui-schema-'))
+    try {
+      await this.runGenerateSchemaCommand(outDir)
+      const parsed = JSON.parse(await readFile(join(outDir, 'ServerNotification.json'), 'utf8')) as unknown
+      const methods = this.extractMethodsFromSchema(parsed)
+      this.notificationCatalogCache = methods
+      return methods
+    } finally {
+      await rm(outDir, { recursive: true, force: true }).catch(() => {})
     }
   }
 

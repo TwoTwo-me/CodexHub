@@ -591,6 +591,139 @@ test('relay-backed skill install returns a connector upgrade error when the remo
   }
 })
 
+test('relay-backed Hook Settings can discover method catalogs and read config values', async () => {
+  const server = await startServer({ password: 'relay-hook-settings-bootstrap-1' })
+  const connectorModule = await loadConnectorModule()
+
+  try {
+    const cookie = await loginAndCompleteBootstrap(
+      server.baseUrl,
+      'relay-admin',
+      'relay-hook-settings-bootstrap-1',
+      'relay-hook-settings-admin',
+      'relay-hook-settings-bootstrap-2',
+    )
+    const credentialToken = await createConnectorCredential(server.baseUrl, cookie, 'remote-hook-settings')
+    const rpcCalls = []
+
+    const transport = new connectorModule.HttpRelayHubTransport(server.baseUrl, { allowInsecureHttp: true })
+    const connector = new connectorModule.CodexRelayConnector({
+      token: credentialToken,
+      transport,
+      connectorId: 'remote-hook-settings',
+      pollWaitMs: 50,
+      notificationFlushDelayMs: 0,
+      appServer: {
+        async rpc(method, params) {
+          rpcCalls.push({ method, params })
+          if (method === 'codexui/meta/methods') {
+            return {
+              data: ['config/read', 'configRequirements/read', 'config/batchWrite', 'skills/list'],
+            }
+          }
+          if (method === 'codexui/meta/notifications') {
+            return {
+              data: ['server/request', 'server/request/resolved'],
+            }
+          }
+          if (method === 'config/read') {
+            return {
+              config: {
+                approval_policy: 'on-request',
+                sandbox_mode: 'workspace-write',
+              },
+            }
+          }
+          if (method === 'configRequirements/read') {
+            return {
+              requirements: {
+                allowedApprovalPolicies: ['on-request', 'never'],
+                allowedSandboxModes: ['workspace-write'],
+              },
+            }
+          }
+          if (method === 'config/batchWrite') {
+            return { ok: true }
+          }
+          if (method === 'thread/list') {
+            return { data: [] }
+          }
+          throw new Error(`Unexpected relay method: ${method}`)
+        },
+        onNotification() {
+          return () => {}
+        },
+      },
+    })
+    const connectorLoop = startConnectorLoop(connector)
+
+    try {
+      const methodsResponse = await fetch(`${server.baseUrl}/codex-api/meta/methods?serverId=remote-hook-settings`, {
+        headers: {
+          Accept: 'application/json',
+          Cookie: cookie,
+        },
+      })
+      const methodsPayload = await methodsResponse.json()
+      assert.equal(methodsResponse.status, 200, JSON.stringify(methodsPayload))
+      assert.deepEqual(methodsPayload.data, ['config/read', 'configRequirements/read', 'config/batchWrite', 'skills/list'])
+
+      const notificationsResponse = await fetch(`${server.baseUrl}/codex-api/meta/notifications?serverId=remote-hook-settings`, {
+        headers: {
+          Accept: 'application/json',
+          Cookie: cookie,
+        },
+      })
+      const notificationsPayload = await notificationsResponse.json()
+      assert.equal(notificationsResponse.status, 200, JSON.stringify(notificationsPayload))
+      assert.deepEqual(notificationsPayload.data, ['server/request', 'server/request/resolved'])
+
+      const configReadResponse = await postJson(
+        `${server.baseUrl}/codex-api/rpc`,
+        {
+          method: 'config/read',
+          params: {},
+        },
+        {
+          Cookie: cookie,
+          'x-codex-server-id': 'remote-hook-settings',
+        },
+      )
+      const configReadPayload = await configReadResponse.json()
+      assert.equal(configReadResponse.status, 200, JSON.stringify(configReadPayload))
+      assert.equal(configReadPayload.result?.config?.approval_policy, 'on-request')
+
+      const configRequirementsResponse = await postJson(
+        `${server.baseUrl}/codex-api/rpc`,
+        {
+          method: 'configRequirements/read',
+          params: {},
+        },
+        {
+          Cookie: cookie,
+          'x-codex-server-id': 'remote-hook-settings',
+        },
+      )
+      const configRequirementsPayload = await configRequirementsResponse.json()
+      assert.equal(configRequirementsResponse.status, 200, JSON.stringify(configRequirementsPayload))
+      assert.deepEqual(configRequirementsPayload.result?.requirements?.allowedSandboxModes, ['workspace-write'])
+
+      assert.ok(rpcCalls.some((call) => call.method === 'codexui/meta/methods'))
+      assert.ok(rpcCalls.some((call) => call.method === 'codexui/meta/notifications'))
+      assert.ok(rpcCalls.some((call) => call.method === 'config/read'))
+      assert.ok(rpcCalls.some((call) => call.method === 'configRequirements/read'))
+    } finally {
+      connectorLoop.stop()
+      await Promise.race([
+        connectorLoop.loop,
+        new Promise((resolvePromise) => setTimeout(resolvePromise, 200)),
+      ])
+    }
+  } finally {
+    await server.stop()
+  }
+})
+
 test('relay-backed pending server requests can be hydrated and replied to', async () => {
   const server = await startServer({ password: 'relay-hooks-bootstrap-1' })
   const connectorModule = await loadConnectorModule()

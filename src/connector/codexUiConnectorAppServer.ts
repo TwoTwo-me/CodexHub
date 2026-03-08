@@ -8,6 +8,10 @@ import {
   SERVER_SKILLS_INSTALL_METHOD,
   SERVER_SKILLS_UNINSTALL_METHOD,
 } from '../shared/serverSkillsBridge.js'
+import {
+  SERVER_METHOD_CATALOG_METHOD,
+  SERVER_NOTIFICATION_CATALOG_METHOD,
+} from '../shared/serverMethodCatalogBridge.js'
 
 export class CodexUiConnectorAppServer implements RelayConnectorAppServer {
   private readonly delegate: RelayConnectorAppServer
@@ -61,6 +65,26 @@ export class CodexUiConnectorAppServer implements RelayConnectorAppServer {
       ).uninstallSkillFromHub
       if (typeof uninstallSkillFromHub === 'function') {
         return await uninstallSkillFromHub.call(this.delegate, params)
+      }
+    }
+    if (method === SERVER_METHOD_CATALOG_METHOD) {
+      const listMethods = (
+        this.delegate as RelayConnectorAppServer & {
+          listMethods?: () => Promise<string[]> | string[]
+        }
+      ).listMethods
+      if (typeof listMethods === 'function') {
+        return { data: await listMethods.call(this.delegate) }
+      }
+    }
+    if (method === SERVER_NOTIFICATION_CATALOG_METHOD) {
+      const listNotificationMethods = (
+        this.delegate as RelayConnectorAppServer & {
+          listNotificationMethods?: () => Promise<string[]> | string[]
+        }
+      ).listNotificationMethods
+      if (typeof listNotificationMethods === 'function') {
+        return { data: await listNotificationMethods.call(this.delegate) }
       }
     }
     return await this.delegate.rpc(method, params)

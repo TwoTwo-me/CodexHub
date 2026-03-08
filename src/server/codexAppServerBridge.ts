@@ -46,6 +46,10 @@ import {
   SERVER_SKILLS_INSTALL_METHOD,
   SERVER_SKILLS_UNINSTALL_METHOD,
 } from '../shared/serverSkillsBridge.js'
+import {
+  SERVER_METHOD_CATALOG_METHOD,
+  SERVER_NOTIFICATION_CATALOG_METHOD,
+} from '../shared/serverMethodCatalogBridge.js'
 import type { ConnectorRunnerMode } from '../shared/connectorManagedRuntime.js'
 import {
   createConnectorUpdateJob,
@@ -2870,6 +2874,10 @@ function readConnectorBridgeFeatureLabel(method: string): string {
       return 'Skills Hub installs'
     case SERVER_SKILLS_UNINSTALL_METHOD:
       return 'Skills Hub uninstalls'
+    case SERVER_METHOD_CATALOG_METHOD:
+      return 'Hook settings capability discovery'
+    case SERVER_NOTIFICATION_CATALOG_METHOD:
+      return 'relay notification catalog discovery'
     default:
       return `connector bridge method "${method}"`
   }
@@ -4383,7 +4391,29 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'GET' && url.pathname === '/codex-api/meta/methods') {
         const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
         if (resolved.server.transport === 'relay') {
-          setJson(res, 200, { data: [] })
+          try {
+            const data = await dispatchServerScopedBridgeMethod(
+              resolved,
+              SERVER_METHOD_CATALOG_METHOD,
+              null,
+              relayHub,
+            ) as { data?: string[] } | string[]
+            const methods = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []
+            setJson(res, 200, { data: methods })
+          } catch (error) {
+            const unsupportedError = mapUnsupportedConnectorBridgeMethodError(
+              error,
+              SERVER_METHOD_CATALOG_METHOD,
+              resolved.server.id,
+            )
+            if (unsupportedError) {
+              throw unsupportedError
+            }
+            if (error instanceof RelayHubError) {
+              throw mapRelayHubErrorToBridgeError(error)
+            }
+            throw error
+          }
           return
         }
         const runtime = requireLocalRuntime(resolved, 'Method catalog')
@@ -4395,7 +4425,29 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
       if (req.method === 'GET' && url.pathname === '/codex-api/meta/notifications') {
         const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
         if (resolved.server.transport === 'relay') {
-          setJson(res, 200, { data: [] })
+          try {
+            const data = await dispatchServerScopedBridgeMethod(
+              resolved,
+              SERVER_NOTIFICATION_CATALOG_METHOD,
+              null,
+              relayHub,
+            ) as { data?: string[] } | string[]
+            const methods = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : []
+            setJson(res, 200, { data: methods })
+          } catch (error) {
+            const unsupportedError = mapUnsupportedConnectorBridgeMethodError(
+              error,
+              SERVER_NOTIFICATION_CATALOG_METHOD,
+              resolved.server.id,
+            )
+            if (unsupportedError) {
+              throw unsupportedError
+            }
+            if (error instanceof RelayHubError) {
+              throw mapRelayHubErrorToBridgeError(error)
+            }
+            throw error
+          }
           return
         }
         const runtime = requireLocalRuntime(resolved, 'Notification catalog')
