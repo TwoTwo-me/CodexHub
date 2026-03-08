@@ -12,8 +12,15 @@ if [[ ! -s "$SOURCE_AUTH_FILE" ]]; then
   exit 1
 fi
 
+rm -rf "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
-cp "$SOURCE_AUTH_FILE" "$TARGET_AUTH_FILE"
-chmod 600 "$TARGET_AUTH_FILE"
+install -m 600 "$SOURCE_AUTH_FILE" "$TARGET_AUTH_FILE"
+
+extra_entries="$(find "$TARGET_DIR" -mindepth 1 -maxdepth 1 ! -name "$(basename "$TARGET_AUTH_FILE")" -print -quit || true)"
+if [[ -n "$extra_entries" ]]; then
+  echo "[prepare-codex-auth] Refusing to keep unexpected files in $TARGET_DIR" >&2
+  exit 1
+fi
 
 echo "[prepare-codex-auth] Copied auth file to $TARGET_AUTH_FILE"
+echo "[prepare-codex-auth] Only allowlisted auth.json was materialized."

@@ -6,8 +6,23 @@ COMPOSE_FILE="$ROOT_DIR/docker/multi-server/docker-compose.yml"
 AUTH_FILE="${CODEX_MULTI_SERVER_AUTH_FILE:-${TMPDIR:-/tmp}/codexui-multi-server-auth/auth.json}"
 export CODEX_MULTI_SERVER_AUTH_FILE="$AUTH_FILE"
 
-services=(codex-cli-a codex-cli-b)
-ports=(19101 19102)
+services=(codex-cli-a codex-cli-b codex-cli-c codex-cli-d codex-cli-e)
+ports=(19101 19102 19103 19104 19105)
+
+bootstrap_omx() {
+  local service="$1"
+  docker compose -f "$COMPOSE_FILE" exec -T "$service" sh -lc '
+    set -eu
+    omx setup --scope user --force >/tmp/omx-setup.log 2>&1 || {
+      cat /tmp/omx-setup.log >&2
+      exit 1
+    }
+    omx doctor >/tmp/omx-doctor.log 2>&1 || {
+      cat /tmp/omx-doctor.log >&2
+      exit 1
+    }
+  '
+}
 
 check_port() {
   local port="$1"
@@ -34,7 +49,12 @@ socket.once('error', () => {
 for service in "${services[@]}"; do
   docker compose -f "$COMPOSE_FILE" exec -T "$service" sh -lc 'test -s /root/.codex/auth.json'
   docker compose -f "$COMPOSE_FILE" exec -T "$service" codex --version >/dev/null
-  echo "[multi-server-smoke] $service has codex CLI + auth.json"
+  docker compose -f "$COMPOSE_FILE" exec -T "$service" omx version >/dev/null
+  bootstrap_omx "$service"
+  docker compose -f "$COMPOSE_FILE" exec -T "$service" sh -lc '
+    test ! -e /root/.omx/state/sessions || test -z "$(find /root/.omx/state/sessions -mindepth 1 -print -quit 2>/dev/null)"
+  '
+  echo "[multi-server-smoke] $service has codex CLI + auth.json + oh-my-codex bootstrap"
 done
 
 for port in "${ports[@]}"; do

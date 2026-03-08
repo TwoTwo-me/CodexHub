@@ -1,17 +1,20 @@
 name: codexui-multi-server
 
+x-codex-cli-service: &codex-cli-service
+  build:
+    context: ../..
+    dockerfile: docker/multi-server/Dockerfile.codex-cli
+  environment:
+    CODEX_HOME: /root/.codex
+  volumes:
+    - ${CODEX_MULTI_SERVER_AUTH_FILE:-/tmp/codexui-multi-server-auth/auth.json}:/root/.codex/auth.json:ro
+
 services:
   codex-cli-a:
-    build:
-      context: ../..
-      dockerfile: docker/multi-server/Dockerfile.codex-cli
+    <<: *codex-cli-service
     command: ["codex", "app-server", "--listen", "ws://0.0.0.0:9101"]
-    environment:
-      CODEX_HOME: /root/.codex
     ports:
       - "127.0.0.1:19101:9101"
-    volumes:
-      - ${CODEX_MULTI_SERVER_AUTH_FILE:-/tmp/codexui-multi-server-auth/auth.json}:/root/.codex/auth.json:ro
     healthcheck:
       test:
         [
@@ -23,21 +26,60 @@ services:
       retries: 20
 
   codex-cli-b:
-    build:
-      context: ../..
-      dockerfile: docker/multi-server/Dockerfile.codex-cli
+    <<: *codex-cli-service
     command: ["codex", "app-server", "--listen", "ws://0.0.0.0:9102"]
-    environment:
-      CODEX_HOME: /root/.codex
     ports:
       - "127.0.0.1:19102:9102"
-    volumes:
-      - ${CODEX_MULTI_SERVER_AUTH_FILE:-/tmp/codexui-multi-server-auth/auth.json}:/root/.codex/auth.json:ro
     healthcheck:
       test:
         [
           "CMD-SHELL",
           "node -e \"const net=require('node:net');const s=net.connect(9102,'127.0.0.1');s.once('connect',()=>{s.end();process.exit(0)});s.once('error',()=>process.exit(1));setTimeout(()=>process.exit(1),1500);\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  codex-cli-c:
+    <<: *codex-cli-service
+    command: ["codex", "app-server", "--listen", "ws://0.0.0.0:9103"]
+    ports:
+      - "127.0.0.1:19103:9103"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const net=require('node:net');const s=net.connect(9103,'127.0.0.1');s.once('connect',()=>{s.end();process.exit(0)});s.once('error',()=>process.exit(1));setTimeout(()=>process.exit(1),1500);\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  codex-cli-d:
+    <<: *codex-cli-service
+    command: ["codex", "app-server", "--listen", "ws://0.0.0.0:9104"]
+    ports:
+      - "127.0.0.1:19104:9104"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const net=require('node:net');const s=net.connect(9104,'127.0.0.1');s.once('connect',()=>{s.end();process.exit(0)});s.once('error',()=>process.exit(1));setTimeout(()=>process.exit(1),1500);\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  codex-cli-e:
+    <<: *codex-cli-service
+    command: ["codex", "app-server", "--listen", "ws://0.0.0.0:9105"]
+    ports:
+      - "127.0.0.1:19105:9105"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const net=require('node:net');const s=net.connect(9105,'127.0.0.1');s.once('connect',()=>{s.end();process.exit(0)});s.once('error',()=>process.exit(1));setTimeout(()=>process.exit(1),1500);\"",
         ]
       interval: 5s
       timeout: 3s

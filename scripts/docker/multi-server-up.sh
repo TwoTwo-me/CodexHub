@@ -12,4 +12,8 @@ docker compose -f "$COMPOSE_FILE" up --build -d
 
 docker compose -f "$COMPOSE_FILE" ps
 
-echo "[multi-server-up] Codex multi-server containers are running on ws://127.0.0.1:19101 and ws://127.0.0.1:19102"
+for service in codex-cli-a codex-cli-b codex-cli-c codex-cli-d codex-cli-e; do
+  docker compose -f "$COMPOSE_FILE" exec -T "$service" sh -lc 'mkdir -p "$CODEX_HOME" && test -s "$CODEX_HOME/auth.json"'
+done
+
+echo "[multi-server-up] Codex multi-server containers are running on ws://127.0.0.1:19101..19105"
