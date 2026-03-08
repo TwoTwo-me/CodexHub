@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -193,8 +192,10 @@ export function renderManagedConnectorRunnerScript(statePath: string, envPath: s
     '  if [ -n "${CODEXUI_CONNECTOR_RELAY_E2EE_PASSPHRASE:-}" ]; then',
     '    CMD+=(--passphrase "$CODEXUI_CONNECTOR_RELAY_E2EE_PASSPHRASE")',
     '  fi',
+    '  set +e',
     '  "${CMD[@]}"',
     '  STATUS=$?',
+    '  set -e',
     '  if [ "$STATUS" -eq 75 ]; then',
     '    continue',
     '  fi',
@@ -215,10 +216,8 @@ export async function ensureManagedConnectorRuntimeBundle(statePath: string, sta
   const envPath = deriveManagedConnectorRuntimeEnvPath(statePath)
   const runnerPath = getManagedConnectorRunnerPath(state.connectorId)
   await writeManagedConnectorRuntimeState(statePath, state)
-  if (!existsSync(runnerPath)) {
-    await writeFile(runnerPath, renderManagedConnectorRunnerScript(statePath, envPath), { encoding: 'utf8', mode: 0o700 })
-    await chmod(runnerPath, 0o700)
-  }
+  await writeFile(runnerPath, renderManagedConnectorRunnerScript(statePath, envPath), { encoding: 'utf8', mode: 0o700 })
+  await chmod(runnerPath, 0o700)
   return { statePath, envPath, runnerPath }
 }
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import test from 'node:test'
@@ -19,6 +19,35 @@ test('connector package telemetry reports the installed package version', async 
 
   const reportedVersion = await module.readConnectorVersion()
   assert.equal(reportedVersion, '0.1.4')
+})
+
+test('managed connector runtime bundle rewrites the runner script and preserves restart exit handling', async () => {
+  const module = await loadConnectorModule()
+  assert.equal(typeof module.createManagedConnectorRuntimeState, 'function')
+  assert.equal(typeof module.ensureManagedConnectorRuntimeBundle, 'function')
+
+  const tempHome = await mkdtemp(resolve(tmpdir(), 'codexui-managed-runner-'))
+  const statePath = resolve(tempHome, 'edge-alpha.state.json')
+  const state = module.createManagedConnectorRuntimeState({
+    connectorId: 'edge-alpha',
+    hubAddress: 'https://hub.example.test',
+    tokenFilePath: resolve(tempHome, 'edge-alpha.token'),
+    packageSpec: 'github:TwoTwo-me/codexUI#main',
+    runnerMode: 'script',
+    currentVersion: '0.1.4',
+  })
+
+  const firstBundle = await module.ensureManagedConnectorRuntimeBundle(statePath, state)
+  const firstRunner = await readFile(firstBundle.runnerPath, 'utf8')
+  assert.match(firstRunner, /set \+e/u)
+  assert.match(firstRunner, /STATUS=\$\?/u)
+  assert.match(firstRunner, /if \[ "\$STATUS" -eq 75 \]; then/u)
+
+  await writeFile(firstBundle.runnerPath, '# old runner\n', 'utf8')
+  const secondBundle = await module.ensureManagedConnectorRuntimeBundle(statePath, state)
+  const rewrittenRunner = await readFile(secondBundle.runnerPath, 'utf8')
+  assert.doesNotMatch(rewrittenRunner, /# old runner/u)
+  assert.match(rewrittenRunner, /continue/u)
 })
 
 test('managed connector update stages a verified artifact and finalizes the pending job after restart', async () => {

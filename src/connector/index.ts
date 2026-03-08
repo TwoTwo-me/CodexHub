@@ -46,6 +46,7 @@ export {
   readManagedConnectorRuntimeState,
   writeManagedConnectorRuntimeState,
 } from './managedUpdates.js'
+export { ensureManagedConnectorRuntimeBundle } from '../shared/connectorManagedRuntime.js'
 
 export async function readConnectorVersion(): Promise<string> {
   try {
