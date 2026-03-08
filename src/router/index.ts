@@ -38,6 +38,11 @@ const router = createRouter({
       component: EmptyRouteView,
     },
     {
+      path: '/setup/bootstrap-admin',
+      name: 'bootstrap-setup',
+      component: EmptyRouteView,
+    },
+    {
       path: '/new-thread',
       redirect: { name: 'home' },
     },

@@ -17,6 +17,10 @@ type RunningServer = {
   baseUrl: string
   username: string
   password: string
+  bootstrapUsername: string
+  bootstrapPassword: string
+  rotatedUsername: string
+  rotatedPassword: string
   codeHome: string
   child: ChildProcessWithoutNullStreams
 }
@@ -55,10 +59,48 @@ async function getAvailablePort(): Promise<number> {
   return address.port
 }
 
+async function runCommand(args: string[], input?: string): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+  const child = spawn('node', args, {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      CODEXUI_SKIP_CODEX_LOGIN: 'true',
+      CODEXUI_OPEN_BROWSER: 'false',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => { stdout += chunk })
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  child.stdin.end(input ?? '')
+
+  const exitCode = await new Promise<number | null>((resolvePromise, reject) => {
+    child.once('error', reject)
+    child.once('close', resolvePromise)
+  })
+
+  return { exitCode, stdout, stderr }
+}
+
+async function generatePasswordHash(password: string): Promise<string> {
+  const result = await runCommand(['dist-cli/index.js', 'hash-password', '--password-stdin'], password)
+  expect(result.exitCode, result.stderr || result.stdout).toBe(0)
+  return result.stdout.trim()
+}
+
 async function startFallbackHub(): Promise<RunningServer> {
   const port = await getAvailablePort()
   const codeHome = mkdtempSync(join(tmpdir(), 'codexui-admin-playwright-'))
-  const child = spawn('node', ['dist-cli/index.js', '--host', '127.0.0.1', '--port', String(port), '--username', 'admin', '--password', 'admin-pass-1'], {
+  const bootstrapUsername = 'admin'
+  const bootstrapPassword = 'admin-pass-1'
+  const rotatedUsername = 'hub-admin'
+  const rotatedPassword = 'hub-admin-pass-2'
+  const passwordHash = await generatePasswordHash(bootstrapPassword)
+  const child = spawn('node', ['dist-cli/index.js', '--host', '127.0.0.1', '--port', String(port), '--username', bootstrapUsername, '--password-hash', passwordHash], {
     cwd: repoRoot,
     env: {
       ...process.env,
@@ -87,8 +129,12 @@ async function startFallbackHub(): Promise<RunningServer> {
       if (response.ok) {
         return {
           baseUrl,
-          username: 'admin',
-          password: 'admin-pass-1',
+          username: bootstrapUsername,
+          password: bootstrapPassword,
+          bootstrapUsername,
+          bootstrapPassword,
+          rotatedUsername,
+          rotatedPassword,
           codeHome,
           child,
         }
@@ -109,13 +155,32 @@ async function stopFallbackHub(server: RunningServer | null): Promise<void> {
   rmSync(server.codeHome, { recursive: true, force: true })
 }
 
-async function login(page: import('@playwright/test').Page, baseUrl: string, username: string, password: string): Promise<void> {
-  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' })
+async function completeBootstrapSetupIfNeeded(page: import('@playwright/test').Page, runtime: RunningServer): Promise<void> {
+  const setupHeading = page.getByRole('heading', { name: 'Change your admin credentials' })
+  const needsSetup = await setupHeading.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false)
+  if (!needsSetup) {
+    return
+  }
+
+  await page.getByLabel('Current password').fill(runtime.bootstrapPassword)
+  await page.getByLabel('New admin username').fill(runtime.rotatedUsername)
+  await page.getByLabel('New password', { exact: true }).fill(runtime.rotatedPassword)
+  await page.getByLabel('Confirm new password', { exact: true }).fill(runtime.rotatedPassword)
+  await page.getByRole('button', { name: 'Complete setup' }).click()
+  await expect(page.getByText(`${runtime.rotatedUsername} (admin)`)).toBeVisible({ timeout: 20_000 })
+  runtime.username = runtime.rotatedUsername
+  runtime.password = runtime.rotatedPassword
+  await page.waitForTimeout(1200)
+}
+
+async function login(page: import('@playwright/test').Page, runtime: RunningServer): Promise<void> {
+  await page.goto(runtime.baseUrl, { waitUntil: 'domcontentloaded' })
   await expect(page.getByLabel('Password', { exact: true })).toBeVisible()
-  await page.getByLabel('Username', { exact: true }).fill(username)
-  await page.getByLabel('Password', { exact: true }).fill(password)
+  await page.getByLabel('Username', { exact: true }).fill(runtime.username)
+  await page.getByLabel('Password', { exact: true }).fill(runtime.password)
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByText(`${username} (admin)`)).toBeVisible({ timeout: 20_000 })
+  await completeBootstrapSetupIfNeeded(page, runtime)
+  await expect(page.getByText(`${runtime.username} (admin)`)).toBeVisible({ timeout: 20_000 })
   await page.waitForTimeout(1200)
 }
 
@@ -123,18 +188,25 @@ test.setTimeout(90_000)
 
 test.describe('admin panel screenshots', () => {
   let fallbackHub: RunningServer | null = null
-  const runtime = {
-    baseUrl: BASE_URL,
-    username: USERNAME,
-    password: PASSWORD,
-  }
+  let runtime: RunningServer
 
   test.beforeAll(async () => {
-    if (!runtime.baseUrl || !runtime.password) {
+    if (!BASE_URL || !PASSWORD) {
       fallbackHub = await startFallbackHub()
-      runtime.baseUrl = fallbackHub.baseUrl
-      runtime.username = fallbackHub.username
-      runtime.password = fallbackHub.password
+      runtime = fallbackHub
+      return
+    }
+
+    runtime = {
+      baseUrl: BASE_URL,
+      username: USERNAME,
+      password: PASSWORD,
+      bootstrapUsername: USERNAME,
+      bootstrapPassword: PASSWORD,
+      rotatedUsername: `${USERNAME}-primary`,
+      rotatedPassword: `${PASSWORD}-rotated-1`,
+      codeHome: '',
+      child: null as unknown as ChildProcessWithoutNullStreams,
     }
   })
 
@@ -145,7 +217,7 @@ test.describe('admin panel screenshots', () => {
   test('captures desktop admin panel screenshot', async ({ page }) => {
     ensureDir(SCREENSHOT_DIR)
     await page.setViewportSize({ width: 1440, height: 900 })
-    await login(page, runtime.baseUrl, runtime.username, runtime.password)
+    await login(page, runtime)
 
     await page.goto(`${runtime.baseUrl}/admin`, { waitUntil: 'domcontentloaded' })
     await expect(page.getByRole('heading', { name: 'User Management' })).toBeVisible()
@@ -160,7 +232,7 @@ test.describe('admin panel screenshots', () => {
   test('captures mobile admin panel screenshot', async ({ page }) => {
     ensureDir(SCREENSHOT_DIR)
     await page.setViewportSize({ width: 375, height: 812 })
-    await login(page, runtime.baseUrl, runtime.username, runtime.password)
+    await login(page, runtime)
 
     await page.goto(`${runtime.baseUrl}/admin`, { waitUntil: 'domcontentloaded' })
     await expect(page.getByRole('heading', { name: 'User Management' })).toBeVisible()

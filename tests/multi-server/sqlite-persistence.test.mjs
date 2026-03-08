@@ -83,10 +83,51 @@ async function waitForServerReady(baseUrl, child, outputRef) {
   throw new Error(`Timed out waiting for ${baseUrl}\n${outputRef.stdout}\n${outputRef.stderr}`)
 }
 
+async function runCommand(args, { env, input, cwd = repoRoot } = {}) {
+  const child = spawn('node', args, {
+    cwd,
+    env: createBaseEnv(env),
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk
+  })
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk
+  })
+
+  if (input !== undefined) {
+    child.stdin.end(input)
+  } else {
+    child.stdin.end()
+  }
+
+  const exitCode = await new Promise((resolvePromise, reject) => {
+    child.once('error', reject)
+    child.once('close', resolvePromise)
+  })
+
+  return { exitCode, stdout, stderr }
+}
+
+async function generatePasswordHash(password) {
+  const result = await runCommand(['dist-cli/index.js', 'hash-password', '--password-stdin'], {
+    input: password,
+  })
+  assert.equal(result.exitCode, 0, result.stderr || result.stdout)
+  return result.stdout.trim()
+}
+
 async function startServer() {
   const port = await getAvailablePort()
   const codeHome = await mkdtemp(join(tmpdir(), 'codexui-sqlite-state-'))
-  const child = spawn('node', ['dist-cli/index.js', '--host', '127.0.0.1', '--port', String(port), '--username', 'sqlite-admin', '--password', 'sqlite-secret-pass-1'], {
+  const passwordHash = await generatePasswordHash('sqlite-secret-pass-1')
+  const child = spawn('node', ['dist-cli/index.js', '--host', '127.0.0.1', '--port', String(port), '--username', 'sqlite-admin', '--password-hash', passwordHash], {
     cwd: repoRoot,
     env: createBaseEnv({
       CODEX_HOME: codeHome,
@@ -155,6 +196,17 @@ test('hub persists authenticated user registries inside sqlite state entries', a
     assert.equal(loginResponse.status, 200)
     const cookie = loginResponse.headers.get('set-cookie')
     assert.ok(cookie)
+
+    const completeSetupResponse = await postJson(
+      `${server.baseUrl}/auth/bootstrap/complete`,
+      {
+        currentPassword: 'sqlite-secret-pass-1',
+        newUsername: 'sqlite-primary-admin',
+        newPassword: 'sqlite-secret-pass-2',
+      },
+      { Cookie: cookie },
+    )
+    assert.equal(completeSetupResponse.status, 200)
 
     const sessionResponse = await fetch(`${server.baseUrl}/auth/session`, {
       headers: { Cookie: cookie },

@@ -195,6 +195,25 @@ test('server-scoped filesystem endpoints dispatch to the selected connector inst
     const cookie = loginResponse.headers.get('set-cookie')
     assert.ok(cookie)
 
+    const completeSetupResponse = await postJson(
+      `${server.baseUrl}/auth/bootstrap/complete`,
+      {
+        currentPassword: password,
+        newUsername: 'relay-primary-admin',
+        newPassword: 'relay-files-secret-2',
+      },
+      { Cookie: cookie },
+    )
+    assert.equal(completeSetupResponse.status, 200)
+
+    const rotatedLoginResponse = await postJson(`${server.baseUrl}/auth/login`, {
+      username: 'relay-primary-admin',
+      password: 'relay-files-secret-2',
+    })
+    assert.equal(rotatedLoginResponse.status, 200)
+    const rotatedCookie = rotatedLoginResponse.headers.get('set-cookie')
+    assert.ok(rotatedCookie)
+
     const createResponse = await postJson(
       `${server.baseUrl}/codex-api/connectors`,
       {
@@ -202,7 +221,7 @@ test('server-scoped filesystem endpoints dispatch to the selected connector inst
         name: 'Remote Edge',
         hubAddress: server.baseUrl,
       },
-      { Cookie: cookie },
+      { Cookie: rotatedCookie },
     )
     assert.equal(createResponse.status, 201)
     const createBody = await createResponse.json()

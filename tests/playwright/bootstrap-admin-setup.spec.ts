@@ -14,7 +14,6 @@ type RunningServer = {
   baseUrl: string
   codeHome: string
   child: ChildProcessWithoutNullStreams
-  readOutput: () => string
   bootstrapUsername: string
   bootstrapPassword: string
   adminUsername: string
@@ -74,12 +73,8 @@ async function runCommand(args: string[], input?: string): Promise<{ exitCode: n
   let stderr = ''
   child.stdout.setEncoding('utf8')
   child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (chunk) => {
-    stdout += chunk
-  })
-  child.stderr.on('data', (chunk) => {
-    stderr += chunk
-  })
+  child.stdout.on('data', (chunk) => { stdout += chunk })
+  child.stderr.on('data', (chunk) => { stderr += chunk })
   child.stdin.end(input ?? '')
 
   const exitCode = await new Promise<number | null>((resolvePromise, reject) => {
@@ -98,11 +93,11 @@ async function generatePasswordHash(password: string): Promise<string> {
 
 async function startServer(): Promise<RunningServer> {
   const port = await getAvailablePort()
-  const codeHome = mkdtempSync(join(tmpdir(), 'codexui-signup-approval-'))
+  const codeHome = mkdtempSync(join(tmpdir(), 'codexui-bootstrap-setup-'))
   const bootstrapUsername = 'admin'
   const bootstrapPassword = 'admin-pass-1'
-  const adminUsername = 'hub-admin'
-  const adminPassword = 'hub-admin-pass-2'
+  const adminUsername = 'secure-admin'
+  const adminPassword = 'secure-admin-pass-2'
   const passwordHash = await generatePasswordHash(bootstrapPassword)
   const child = spawn('node', ['dist-cli/index.js', '--host', '127.0.0.1', '--port', String(port), '--username', bootstrapUsername, '--password-hash', passwordHash], {
     cwd: repoRoot,
@@ -119,12 +114,8 @@ async function startServer(): Promise<RunningServer> {
   let stderr = ''
   child.stdout.setEncoding('utf8')
   child.stderr.setEncoding('utf8')
-  child.stdout.on('data', (chunk) => {
-    stdout += chunk
-  })
-  child.stderr.on('data', (chunk) => {
-    stderr += chunk
-  })
+  child.stdout.on('data', (chunk) => { stdout += chunk })
+  child.stderr.on('data', (chunk) => { stderr += chunk })
 
   const baseUrl = `http://127.0.0.1:${String(port)}`
   const deadline = Date.now() + 20_000
@@ -139,7 +130,6 @@ async function startServer(): Promise<RunningServer> {
           baseUrl,
           codeHome,
           child,
-          readOutput: () => `${stdout}\n${stderr}`,
           bootstrapUsername,
           bootstrapPassword,
           adminUsername,
@@ -161,22 +151,7 @@ async function stopServer(server: RunningServer): Promise<void> {
   rmSync(server.codeHome, { recursive: true, force: true })
 }
 
-async function completeBootstrapSetup(page: import('@playwright/test').Page, server: RunningServer): Promise<void> {
-  const setupHeading = page.getByRole('heading', { name: 'Change your admin credentials' })
-  const needsSetup = await setupHeading.waitFor({ state: 'visible', timeout: 2_000 }).then(() => true).catch(() => false)
-  if (!needsSetup) {
-    return
-  }
-
-  await page.getByLabel('Current password').fill(server.bootstrapPassword)
-  await page.getByLabel('New admin username').fill(server.adminUsername)
-  await page.getByLabel('New password', { exact: true }).fill(server.adminPassword)
-  await page.getByLabel('Confirm new password', { exact: true }).fill(server.adminPassword)
-  await page.getByRole('button', { name: 'Complete setup' }).click()
-  await expect(page.getByText(`${server.adminUsername} (admin)`)).toBeVisible({ timeout: 20_000 })
-}
-
-test.describe('signup approval flow', () => {
+test.describe('bootstrap admin setup wizard', () => {
   test.setTimeout(120_000)
 
   let server: RunningServer
@@ -189,46 +164,41 @@ test.describe('signup approval flow', () => {
     await stopServer(server)
   })
 
-  test('public signup waits for admin approval before login succeeds', async ({ page }) => {
+  test('forces credential rotation before opening the app shell', async ({ page }) => {
     ensureDir(SCREENSHOT_DIR)
     await page.setViewportSize({ width: 1440, height: 960 })
 
     await page.goto(server.baseUrl, { waitUntil: 'domcontentloaded' })
-    await expect(page.getByRole('heading', { name: 'Codex Web Local' })).toBeVisible()
-    await expect(page.getByRole('heading', { name: 'Request access' })).toBeVisible()
+    await expect(page.getByLabel('Username', { exact: true })).toBeVisible()
+    await page.getByLabel('Username', { exact: true }).fill(server.bootstrapUsername)
+    await page.getByLabel('Password', { exact: true }).fill(server.bootstrapPassword)
+    await page.getByRole('button', { name: 'Sign in' }).click()
 
-    await page.getByLabel('Create username').fill('pending-user')
-    await page.getByLabel('Create password').fill('pending-pass-1')
-    await page.getByRole('button', { name: 'Request access' }).click()
-    await expect(page.getByText('Your access request is pending admin approval.')).toBeVisible()
-
-    await page.locator('#username').fill(server.bootstrapUsername)
-    await page.locator('#pw').fill(server.bootstrapPassword)
-    await page.locator('#login-form').getByRole('button', { name: 'Sign in' }).click()
-    await completeBootstrapSetup(page, server)
-    await expect(page.getByText(`${server.adminUsername} (admin)`)).toBeVisible({ timeout: 20_000 })
-
-    await page.goto(`${server.baseUrl}/admin`, { waitUntil: 'domcontentloaded' })
-    await expect(page.getByRole('heading', { name: 'User Management' })).toBeVisible()
-    await expect(page.getByRole('cell', { name: 'pending-user', exact: true })).toBeVisible()
-    await page.getByRole('row', { name: /pending-user/i }).getByRole('button', { name: 'Approve' }).click()
-    await expect(page.getByText('Approved', { exact: true })).toBeVisible()
+    await expect(page).toHaveURL(/\/setup\/bootstrap-admin/u)
+    await expect(page.getByRole('heading', { name: 'Change your admin credentials' })).toBeVisible()
     await page.waitForTimeout(1200)
     await page.screenshot({
-      path: `${SCREENSHOT_DIR}/signup-approval-admin-desktop.png`,
+      path: `${SCREENSHOT_DIR}/bootstrap-admin-setup-wizard-desktop.png`,
       fullPage: true,
     })
 
-    await page.getByRole('button', { name: 'Sign out' }).click()
-    await expect(page.locator('#login-form').getByRole('button', { name: 'Sign in' })).toBeVisible()
+    await page.getByLabel('Current password').fill(server.bootstrapPassword)
+    await page.getByLabel('New admin username').fill(server.bootstrapUsername)
+    await page.getByLabel('New password', { exact: true }).fill(server.bootstrapPassword)
+    await page.getByLabel('Confirm new password', { exact: true }).fill(server.bootstrapPassword)
+    await page.getByRole('button', { name: 'Complete setup' }).click()
+    await expect(page.getByText('Choose a different admin username before continuing.')).toBeVisible()
 
-    await page.locator('#username').fill('pending-user')
-    await page.locator('#pw').fill('pending-pass-1')
-    await page.locator('#login-form').getByRole('button', { name: 'Sign in' }).click()
-    await expect(page.getByText('pending-user (user)')).toBeVisible({ timeout: 20_000 })
+    await page.getByLabel('New admin username').fill(server.adminUsername)
+    await page.getByLabel('New password', { exact: true }).fill(server.adminPassword)
+    await page.getByLabel('Confirm new password', { exact: true }).fill(server.adminPassword)
+    await page.getByRole('button', { name: 'Complete setup' }).click()
+
+    await expect(page.getByText(`${server.adminUsername} (admin)`)).toBeVisible({ timeout: 20_000 })
+    await expect(page).toHaveURL(new RegExp(`${server.baseUrl.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}/?$`))
     await page.waitForTimeout(1200)
     await page.screenshot({
-      path: `${SCREENSHOT_DIR}/signup-approval-user-desktop.png`,
+      path: `${SCREENSHOT_DIR}/bootstrap-admin-setup-complete-desktop.png`,
       fullPage: true,
     })
   })

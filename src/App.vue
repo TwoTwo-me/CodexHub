@@ -1,5 +1,25 @@
 <template>
-  <DesktopLayout :is-sidebar-collapsed="isSidebarCollapsed" @close-sidebar="setSidebarCollapsed(true)">
+  <section v-if="isSetupRequired" class="bootstrap-setup-shell">
+    <header class="bootstrap-setup-shell-header">
+      <div class="bootstrap-setup-shell-identity">
+        <p class="bootstrap-setup-shell-eyebrow">Secure the Hub before continuing</p>
+        <p class="bootstrap-setup-shell-user">{{ sessionLabel }}</p>
+      </div>
+      <button
+        type="button"
+        class="header-session-logout"
+        :disabled="isLoggingOut"
+        @click="void onLogout()"
+      >
+        {{ isLoggingOut ? 'Signing out…' : 'Sign out' }}
+      </button>
+    </header>
+    <BootstrapSetupPanel
+      :current-username="sessionUser?.username ?? 'admin'"
+      @completed="void onBootstrapSetupCompleted()"
+    />
+  </section>
+  <DesktopLayout v-else :is-sidebar-collapsed="isSidebarCollapsed" @close-sidebar="setSidebarCollapsed(true)">
     <template #sidebar>
       <section class="sidebar-root">
         <SidebarThreadControls
@@ -245,6 +265,7 @@ import SkillsHub from './components/content/SkillsHub.vue'
 import AdminPanel from './components/content/AdminPanel.vue'
 import SettingsPanel from './components/content/SettingsPanel.vue'
 import HookInboxPanel from './components/content/HookInboxPanel.vue'
+import BootstrapSetupPanel from './components/content/BootstrapSetupPanel.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerX from './components/icons/IconTablerX.vue'
@@ -338,14 +359,20 @@ const isAdminRoute = computed(() => route.name === 'admin')
 const isSettingsRoute = computed(() => route.name === 'settings')
 const isHooksRoute = computed(() => route.name === 'hooks')
 const isThreadRoute = computed(() => route.name === 'thread')
+const isBootstrapSetupRoute = computed(() => route.name === 'bootstrap-setup')
 type SessionUser = {
   id: string
   username: string
   role: 'admin' | 'user'
+  setupRequired: boolean
+  mustChangeUsername: boolean
+  mustChangePassword: boolean
+  bootstrapState: string
 }
 const sessionUser = ref<SessionUser | null>(null)
 const isLoggingOut = ref(false)
 const isAdminUser = computed(() => sessionUser.value?.role === 'admin')
+const isSetupRequired = computed(() => sessionUser.value?.setupRequired === true)
 const hasRegisteredServers = computed(() => availableServers.value.length > 0)
 const sessionLabel = computed(() => {
   const user = sessionUser.value
@@ -405,10 +432,12 @@ onUnmounted(() => {
 })
 
 function onSkillsChanged(): void {
+  if (isSetupRequired.value) return
   void refreshSkills()
 }
 
 function onConnectorsChanged(): void {
+  if (isSetupRequired.value) return
   void refreshAll()
 }
 
@@ -434,6 +463,7 @@ function onSidebarSearchKeydown(event: KeyboardEvent): void {
 }
 
 function onSelectThread(threadId: string): void {
+  if (isSetupRequired.value) return
   if (!threadId) return
   if (route.name === 'thread' && routeThreadId.value === threadId) return
   void router.push({ name: 'thread', params: { threadId } })
@@ -441,10 +471,12 @@ function onSelectThread(threadId: string): void {
 }
 
 function onArchiveThread(threadId: string): void {
+  if (isSetupRequired.value) return
   void archiveThreadById(threadId)
 }
 
 function onStartNewThread(_projectName: string): void {
+  if (isSetupRequired.value) return
   newThreadCwd.value = '~'
   if (isMobile.value) setSidebarCollapsed(true)
   if (isHomeRoute.value) return
@@ -452,6 +484,7 @@ function onStartNewThread(_projectName: string): void {
 }
 
 function onStartNewThreadFromToolbar(): void {
+  if (isSetupRequired.value) return
   newThreadCwd.value = '~'
   if (isMobile.value) setSidebarCollapsed(true)
   if (isHomeRoute.value) return
@@ -459,14 +492,17 @@ function onStartNewThreadFromToolbar(): void {
 }
 
 function onRenameProject(payload: { projectName: string; displayName: string }): void {
+  if (isSetupRequired.value) return
   renameProject(payload.projectName, payload.displayName)
 }
 
 function onRemoveProject(projectName: string): void {
+  if (isSetupRequired.value) return
   removeProject(projectName)
 }
 
 function onReorderProject(payload: { projectName: string; toIndex: number }): void {
+  if (isSetupRequired.value) return
   reorderProject(payload.projectName, payload.toIndex)
 }
 
@@ -475,14 +511,17 @@ function onUpdateThreadScrollState(payload: { threadId: string; state: ThreadScr
 }
 
 function onRespondServerRequest(payload: { id: number; result?: unknown; error?: { code?: number; message: string } }): void {
+  if (isSetupRequired.value) return
   void respondToPendingServerRequest(payload)
 }
 
 function onToggleAutoRefreshTimer(): void {
+  if (isSetupRequired.value) return
   toggleAutoRefreshTimer()
 }
 
 function onSelectServer(serverId: string): void {
+  if (isSetupRequired.value) return
   if (isHomeRoute.value) {
     newThreadCwd.value = '~'
   }
@@ -490,6 +529,7 @@ function onSelectServer(serverId: string): void {
 }
 
 function onOpenHookThread(threadId: string): void {
+  if (isSetupRequired.value) return
   if (!threadId) return
   void router.push({ name: 'thread', params: { threadId } })
   if (isMobile.value) setSidebarCollapsed(true)
@@ -511,6 +551,7 @@ function onWindowKeyDown(event: KeyboardEvent): void {
 }
 
 function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fileAttachments: Array<{ label: string; path: string; fsPath: string }>; skills: Array<{ name: string; path: string }>; mode: 'steer' | 'queue' }): void {
+  if (isSetupRequired.value) return
   const text = payload.text
   if (isHomeRoute.value) {
     void submitFirstMessageForNewThread(text, payload.imageUrls, payload.skills, payload.fileAttachments)
@@ -520,18 +561,22 @@ function onSubmitThreadMessage(payload: { text: string; imageUrls: string[]; fil
 }
 
 function onSelectModel(modelId: string): void {
+  if (isSetupRequired.value) return
   setSelectedModelId(modelId)
 }
 
 function onSelectReasoningEffort(effort: ReasoningEffort | ''): void {
+  if (isSetupRequired.value) return
   setSelectedReasoningEffort(effort)
 }
 
 function onInterruptTurn(): void {
+  if (isSetupRequired.value) return
   void interruptSelectedThreadTurn()
 }
 
 function onRollback(payload: { turnIndex: number }): void {
+  if (isSetupRequired.value) return
   void rollbackSelectedThread(payload.turnIndex)
 }
 
@@ -555,9 +600,15 @@ function normalizeMessageType(rawType: string | undefined, role: string): string
 
 async function initialize(): Promise<void> {
   await refreshSessionUser()
-  await refreshAll()
+  if (!isSetupRequired.value) {
+    await refreshAll()
+  }
   hasInitialized.value = true
   await syncThreadSelectionWithRoute()
+  if (isSetupRequired.value) {
+    stopPolling()
+    return
+  }
   startPolling()
 }
 
@@ -566,6 +617,23 @@ async function syncThreadSelectionWithRoute(): Promise<void> {
   isRouteSyncInProgress.value = true
 
   try {
+    if (isSetupRequired.value) {
+      stopPolling()
+      if (!isBootstrapSetupRoute.value) {
+        await router.replace({ name: 'bootstrap-setup' })
+        return
+      }
+      if (selectedThreadId.value !== '') {
+        await selectThread('')
+      }
+      return
+    }
+
+    if (isBootstrapSetupRoute.value) {
+      await router.replace({ name: 'home' })
+      return
+    }
+
     if (route.name === 'home' || route.name === 'skills' || route.name === 'settings' || route.name === 'hooks') {
       if (selectedThreadId.value !== '') {
         await selectThread('')
@@ -613,6 +681,7 @@ watch(
       knownThreadIdSet.value.has(routeThreadId.value),
       selectedThreadId.value,
       isAdminUser.value,
+      isSetupRequired.value,
     ] as const,
   async () => {
     if (!hasInitialized.value) return
@@ -625,7 +694,7 @@ watch(
   async (threadId) => {
     if (!hasInitialized.value) return
     if (isRouteSyncInProgress.value) return
-    if (isHomeRoute.value || isSkillsRoute.value || isAdminRoute.value || isSettingsRoute.value || isHooksRoute.value) return
+    if (isHomeRoute.value || isSkillsRoute.value || isAdminRoute.value || isSettingsRoute.value || isHooksRoute.value || isBootstrapSetupRoute.value) return
 
     if (!threadId) {
       if (route.name !== 'home') {
@@ -685,14 +754,28 @@ async function refreshSessionUser(): Promise<void> {
     const id = typeof rawUser.id === 'string' ? rawUser.id.trim() : ''
     const username = typeof rawUser.username === 'string' ? rawUser.username.trim() : ''
     const role = rawUser.role === 'admin' ? 'admin' : 'user'
+    const setupRequired = root?.setupRequired === true
+    const mustChangeUsername = root?.mustChangeUsername === true
+    const mustChangePassword = root?.mustChangePassword === true
+    const bootstrapState = typeof root?.bootstrapState === 'string' ? root.bootstrapState : 'none'
     if (!id || !username) {
       sessionUser.value = null
       return
     }
-    sessionUser.value = { id, username, role }
+    sessionUser.value = { id, username, role, setupRequired, mustChangeUsername, mustChangePassword, bootstrapState }
   } catch {
     sessionUser.value = null
   }
+}
+
+async function onBootstrapSetupCompleted(): Promise<void> {
+  await refreshSessionUser()
+  if (isSetupRequired.value) {
+    return
+  }
+  await refreshAll()
+  startPolling()
+  await router.replace({ name: 'home' })
 }
 
 async function onLogout(): Promise<void> {
@@ -861,6 +944,26 @@ async function onLogout(): Promise<void> {
 
 .build-badge {
   @apply fixed top-3 right-3 z-50 rounded-md border border-zinc-200 bg-white/95 px-2 py-1 text-xs font-medium text-zinc-600 shadow-sm backdrop-blur;
+}
+
+.bootstrap-setup-shell {
+  @apply min-h-screen bg-zinc-50 flex flex-col;
+}
+
+.bootstrap-setup-shell-header {
+  @apply flex items-center justify-between gap-3 px-4 py-4 sm:px-6;
+}
+
+.bootstrap-setup-shell-identity {
+  @apply min-w-0 flex flex-col gap-1;
+}
+
+.bootstrap-setup-shell-eyebrow {
+  @apply m-0 text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500;
+}
+
+.bootstrap-setup-shell-user {
+  @apply m-0 text-sm font-medium text-zinc-800 truncate;
 }
 
 </style>

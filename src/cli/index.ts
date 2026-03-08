@@ -275,9 +275,6 @@ async function startServer(options: {
   const bootstrapAdminUsername = resolveBootstrapAdminUsername(options.username)
   const { app, dispose } = createApp({
     bootstrapAdminUsername,
-    ...(bootstrapCredential.enabled && bootstrapCredential.kind === 'password'
-      ? { password: bootstrapCredential.value }
-      : {}),
     ...(bootstrapCredential.enabled && bootstrapCredential.kind === 'hash'
       ? { passwordHash: bootstrapCredential.value }
       : {}),
