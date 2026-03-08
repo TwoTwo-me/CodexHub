@@ -151,6 +151,102 @@
             <p v-if="selectedConnector.credentialIssuedAtIso">Credential issued {{ formatDate(selectedConnector.credentialIssuedAtIso) }}</p>
           </div>
 
+          <section class="connector-update-panel">
+            <div class="settings-card-header">
+              <div>
+                <h4 class="settings-card-title">Managed updates</h4>
+                <p class="settings-card-subtitle">Monitor connector version telemetry and queue restart/update jobs from the Hub.</p>
+              </div>
+            </div>
+
+            <div class="settings-detail-grid">
+              <label class="settings-field">
+                <span class="settings-field-label">Connector version</span>
+                <input class="settings-field-input" type="text" :value="selectedConnector.connectorVersion || '—'" readonly />
+              </label>
+
+              <label class="settings-field">
+                <span class="settings-field-label">Latest compatible release</span>
+                <input class="settings-field-input" type="text" :value="selectedConnector.latestReleaseVersion || '—'" readonly />
+              </label>
+
+              <label class="settings-field">
+                <span class="settings-field-label">Runner mode</span>
+                <input class="settings-field-input" type="text" :value="selectedConnector.runnerMode || '—'" readonly />
+              </label>
+
+              <label class="settings-field">
+                <span class="settings-field-label">Platform</span>
+                <input class="settings-field-input" type="text" :value="selectedConnector.platform || '—'" readonly />
+              </label>
+            </div>
+
+            <div class="connector-summary-bar">
+              <span class="connector-status-pill" :data-state="updateStatusTone(selectedConnector.updateStatus)">
+                {{ formatUpdateStatusLabel(selectedConnector.updateStatus) }}
+              </span>
+              <span>{{ selectedConnector.updateCapable ? 'Hub-managed update ready' : 'Managed update unavailable' }}</span>
+              <span>{{ selectedConnector.restartCapable ? 'Restart from Hub supported' : 'Restart from Hub unavailable' }}</span>
+              <span v-if="selectedConnector.lastTelemetryAtIso">Telemetry {{ formatDate(selectedConnector.lastTelemetryAtIso) }}</span>
+            </div>
+
+            <div class="settings-action-row">
+              <button
+                type="button"
+                class="settings-secondary-button"
+                :disabled="!selectedConnector.restartCapable || isRestartingConnector"
+                @click="void queueConnectorRestart()"
+              >
+                {{ isRestartingConnector ? 'Queueing restart…' : 'Restart connector' }}
+              </button>
+              <button
+                type="button"
+                class="settings-primary-button"
+                :disabled="selectedConnector.updateStatus !== 'update_available' || isUpdatingConnector"
+                @click="void queueConnectorUpdate()"
+              >
+                {{ isUpdatingConnector ? 'Queueing update…' : 'Update connector' }}
+              </button>
+            </div>
+
+            <p v-if="connectorJobStatusMessage" class="settings-inline-status">{{ connectorJobStatusMessage }}</p>
+
+            <div class="settings-status-meta">
+              <p v-if="selectedConnector.latestReleasePublishedAtIso">Release published {{ formatDate(selectedConnector.latestReleasePublishedAtIso) }}</p>
+              <p v-if="selectedConnector.latestReleaseReleaseNotesUrl">
+                Release notes:
+                <a class="settings-inline-link" :href="selectedConnector.latestReleaseReleaseNotesUrl" target="_blank" rel="noreferrer">
+                  {{ selectedConnector.latestReleaseReleaseNotesUrl }}
+                </a>
+              </p>
+            </div>
+
+            <div class="connector-jobs">
+              <div class="connector-jobs-header">
+                <span class="settings-field-label">Recent jobs</span>
+                <button type="button" class="settings-secondary-button settings-secondary-button-small" :disabled="isLoadingJobs" @click="void refreshSelectedConnectorJobs()">
+                  {{ isLoadingJobs ? 'Refreshing…' : 'Refresh jobs' }}
+                </button>
+              </div>
+              <ul v-if="connectorJobs.length > 0" class="connector-job-list">
+                <li v-for="job in connectorJobs" :key="job.id" class="connector-job-item">
+                  <div class="connector-list-row">
+                    <span class="connector-list-name">{{ job.action === 'update' ? 'Update' : 'Restart' }}</span>
+                    <span class="connector-status-pill" :data-state="jobStatusTone(job.status)">
+                      {{ formatJobStatusLabel(job.status) }}
+                    </span>
+                  </div>
+                  <span class="connector-list-meta">{{ job.id }} · requested {{ formatDate(job.requestedAtIso) }}</span>
+                  <span v-if="job.targetVersion" class="connector-list-meta">Target version {{ job.targetVersion }}</span>
+                  <span v-if="job.errorMessage" class="settings-inline-status settings-inline-status-error">{{ job.errorMessage }}</span>
+                </li>
+              </ul>
+              <div v-else class="settings-empty-state settings-empty-state-compact">
+                No connector jobs queued yet.
+              </div>
+            </div>
+          </section>
+
           <div v-if="isRenaming" class="settings-inline-form">
             <label class="settings-field settings-inline-field">
               <span class="settings-field-label">Rename connector</span>
@@ -273,14 +369,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   createConnectorRegistration,
   deleteConnectorRegistration,
+  getConnectorUpdateJobs,
   getConnectorRegistrations,
   renameConnectorRegistration,
+  requestConnectorRestart,
+  requestConnectorUpdate,
   rotateConnectorRegistrationToken,
   type CodexConnectorInfo,
+  type ConnectorUpdateJobInfo,
 } from '../../api/codexGateway'
 import {
   disableBrowserNotifications,
@@ -308,10 +408,15 @@ const isRotating = ref(false)
 const isDeleting = ref(false)
 const isRenaming = ref(false)
 const isTokenRevealed = ref(false)
+const isLoadingJobs = ref(false)
+const isRestartingConnector = ref(false)
+const isUpdatingConnector = ref(false)
 const errorMessage = ref('')
+const connectorJobStatusMessage = ref('')
 const renameDraft = ref('')
 const pendingDeleteConnectorId = ref('')
 const latestInstallArtifact = ref<InstallArtifact | null>(null)
+const connectorJobs = ref<ConnectorUpdateJobInfo[]>([])
 const browserSubscriptions = ref<Array<{
   endpoint: string
   createdAtIso: string
@@ -421,6 +526,70 @@ function formatInstallStateLabel(state: CodexConnectorInfo['installState']): str
   }
 }
 
+function updateStatusTone(state: CodexConnectorInfo['updateStatus'] | undefined): 'connected' | 'offline' | 'pending' | 'expired' | 'reinstall' {
+  switch (state) {
+    case 'up_to_date':
+      return 'connected'
+    case 'update_available':
+      return 'pending'
+    case 'unsupported':
+      return 'offline'
+    case 'unknown':
+    default:
+      return 'reinstall'
+  }
+}
+
+function formatUpdateStatusLabel(state: CodexConnectorInfo['updateStatus'] | undefined): string {
+  switch (state) {
+    case 'up_to_date':
+      return 'Up to date'
+    case 'update_available':
+      return 'Update available'
+    case 'unsupported':
+      return 'Unsupported'
+    case 'unknown':
+    default:
+      return 'Status unknown'
+  }
+}
+
+function jobStatusTone(status: ConnectorUpdateJobInfo['status']): 'connected' | 'offline' | 'pending' | 'expired' | 'reinstall' {
+  switch (status) {
+    case 'healthy':
+      return 'connected'
+    case 'failed':
+      return 'expired'
+    case 'queued':
+    case 'downloading':
+    case 'verifying':
+    case 'applying':
+    case 'restarting':
+    default:
+      return 'pending'
+  }
+}
+
+function formatJobStatusLabel(status: ConnectorUpdateJobInfo['status']): string {
+  switch (status) {
+    case 'healthy':
+      return 'Healthy'
+    case 'failed':
+      return 'Failed'
+    case 'queued':
+      return 'Queued'
+    case 'downloading':
+      return 'Downloading'
+    case 'verifying':
+      return 'Verifying'
+    case 'applying':
+      return 'Applying'
+    case 'restarting':
+    default:
+      return 'Restarting'
+  }
+}
+
 function setLatestInstallArtifact(connector: CodexConnectorInfo, token: string): void {
   latestInstallArtifact.value = {
     connector,
@@ -468,12 +637,32 @@ async function refreshConnectors(): Promise<void> {
     const rows = await getConnectorRegistrations({ includeStats: true })
     connectors.value = rows
     normalizeSelection(rows)
+    await refreshSelectedConnectorJobs()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : 'Failed to load connectors'
     connectors.value = []
     selectedConnectorId.value = ''
+    connectorJobs.value = []
   } finally {
     isLoading.value = false
+  }
+}
+
+async function refreshSelectedConnectorJobs(): Promise<void> {
+  const connector = selectedConnector.value
+  if (!connector) {
+    connectorJobs.value = []
+    return
+  }
+  isLoadingJobs.value = true
+  connectorJobStatusMessage.value = ''
+  try {
+    connectorJobs.value = await getConnectorUpdateJobs(connector.id)
+  } catch (error) {
+    connectorJobs.value = []
+    connectorJobStatusMessage.value = error instanceof Error ? error.message : 'Failed to load connector jobs'
+  } finally {
+    isLoadingJobs.value = false
   }
 }
 
@@ -507,6 +696,8 @@ async function createConnector(): Promise<void> {
     setLatestInstallArtifact(created.connector, created.bootstrapToken)
     pendingDeleteConnectorId.value = ''
     isRenaming.value = false
+    connectorJobs.value = []
+    connectorJobStatusMessage.value = ''
     emit('connectors-changed')
     resetCreateForm()
   } catch (error) {
@@ -560,6 +751,42 @@ async function rotateToken(): Promise<void> {
     errorMessage.value = error instanceof Error ? error.message : 'Failed to reissue install token'
   } finally {
     isRotating.value = false
+  }
+}
+
+async function queueConnectorRestart(): Promise<void> {
+  const connector = selectedConnector.value
+  if (!connector || isRestartingConnector.value) return
+  isRestartingConnector.value = true
+  errorMessage.value = ''
+  connectorJobStatusMessage.value = ''
+  try {
+    const job = await requestConnectorRestart(connector.id)
+    connectorJobStatusMessage.value = `Restart job ${job.id} queued.`
+    await refreshSelectedConnectorJobs()
+    await refreshConnectors()
+  } catch (error) {
+    connectorJobStatusMessage.value = error instanceof Error ? error.message : 'Failed to queue connector restart'
+  } finally {
+    isRestartingConnector.value = false
+  }
+}
+
+async function queueConnectorUpdate(): Promise<void> {
+  const connector = selectedConnector.value
+  if (!connector || isUpdatingConnector.value) return
+  isUpdatingConnector.value = true
+  errorMessage.value = ''
+  connectorJobStatusMessage.value = ''
+  try {
+    const job = await requestConnectorUpdate(connector.id)
+    connectorJobStatusMessage.value = `Update job ${job.id} queued for ${job.targetVersion ?? 'the latest release'}.`
+    await refreshSelectedConnectorJobs()
+    await refreshConnectors()
+  } catch (error) {
+    connectorJobStatusMessage.value = error instanceof Error ? error.message : 'Failed to queue connector update'
+  } finally {
+    isUpdatingConnector.value = false
   }
 }
 
@@ -629,6 +856,10 @@ async function disableNotifications(): Promise<void> {
 onMounted(() => {
   void refreshConnectors()
   void refreshBrowserSubscriptions()
+})
+
+watch(selectedConnectorId, () => {
+  void refreshSelectedConnectorJobs()
 })
 </script>
 
@@ -744,6 +975,10 @@ onMounted(() => {
   @apply mt-2 flex flex-wrap gap-3 text-xs text-zinc-600;
 }
 
+.connector-update-panel {
+  @apply rounded-2xl border border-zinc-200 bg-zinc-50 p-4;
+}
+
 .connector-status-pill {
   @apply inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.05em];
 }
@@ -831,5 +1066,37 @@ onMounted(() => {
 
 .settings-inline-status {
   @apply m-0 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700;
+}
+
+.settings-inline-status-error {
+  @apply border-rose-200 bg-rose-50 text-rose-700;
+}
+
+.settings-inline-link {
+  @apply font-medium text-blue-600 underline underline-offset-2;
+}
+
+.connector-jobs {
+  @apply flex flex-col gap-3;
+}
+
+.connector-jobs-header {
+  @apply flex items-center justify-between gap-3;
+}
+
+.connector-job-list {
+  @apply m-0 flex list-none flex-col gap-2 p-0;
+}
+
+.connector-job-item {
+  @apply rounded-2xl border border-zinc-200 bg-white p-3;
+}
+
+.settings-secondary-button-small {
+  @apply px-3 py-1.5 text-xs;
+}
+
+.settings-empty-state-compact {
+  @apply py-3;
 }
 </style>

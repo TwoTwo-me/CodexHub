@@ -64,6 +64,39 @@ export type CodexConnectorInfo = {
   threadCount?: number
   lastStatsAtIso?: string
   statsStale?: boolean
+  connectorVersion?: string
+  runnerMode?: 'script' | 'systemd-user' | 'pm2-user' | 'manual' | 'unknown'
+  platform?: string
+  hostname?: string
+  updateCapable?: boolean
+  restartCapable?: boolean
+  lastTelemetryAtIso?: string
+  latestReleaseVersion?: string
+  latestReleasePublishedAtIso?: string
+  latestReleaseReleaseNotesUrl?: string
+  updateStatus?: 'unknown' | 'up_to_date' | 'update_available' | 'unsupported'
+}
+
+export type ConnectorUpdateJobInfo = {
+  id: string
+  connectorId: string
+  serverId: string
+  action: 'restart' | 'update'
+  status: 'queued' | 'downloading' | 'verifying' | 'applying' | 'restarting' | 'healthy' | 'failed'
+  requestedAtIso: string
+  startedAtIso?: string
+  completedAtIso?: string
+  targetVersion?: string
+  connectorVersion?: string
+  runnerMode?: 'script' | 'systemd-user' | 'pm2-user' | 'manual' | 'unknown'
+  errorMessage?: string
+  artifact?: {
+    version: string
+    artifactUrl: string
+    sha256: string
+    releaseNotesUrl?: string
+    publishedAtIso?: string
+  }
 }
 
 export type ConnectorCreateInput = {
@@ -822,6 +855,28 @@ function normalizeConnectorInfo(payload: unknown): CodexConnectorInfo | null {
   const threadCount = typeof record.threadCount === 'number' && Number.isFinite(record.threadCount)
     ? Math.max(0, Math.trunc(record.threadCount))
     : undefined
+  const connectorVersion = readString(record.connectorVersion) || undefined
+  const runnerModeRaw = readString(record.runnerMode)
+  const runnerMode = runnerModeRaw === 'script'
+    || runnerModeRaw === 'systemd-user'
+    || runnerModeRaw === 'pm2-user'
+    || runnerModeRaw === 'manual'
+    || runnerModeRaw === 'unknown'
+    ? runnerModeRaw
+    : undefined
+  const platform = readString(record.platform) || undefined
+  const hostname = readString(record.hostname) || undefined
+  const lastTelemetryAtIso = readString(record.lastTelemetryAtIso) || undefined
+  const latestReleaseVersion = readString(record.latestReleaseVersion) || undefined
+  const latestReleasePublishedAtIso = readString(record.latestReleasePublishedAtIso) || undefined
+  const latestReleaseReleaseNotesUrl = readString(record.latestReleaseReleaseNotesUrl) || undefined
+  const updateStatusRaw = readString(record.updateStatus)
+  const updateStatus = updateStatusRaw === 'unknown'
+    || updateStatusRaw === 'up_to_date'
+    || updateStatusRaw === 'update_available'
+    || updateStatusRaw === 'unsupported'
+    ? updateStatusRaw
+    : undefined
 
   return {
     id,
@@ -843,6 +898,17 @@ function normalizeConnectorInfo(payload: unknown): CodexConnectorInfo | null {
     ...(threadCount !== undefined ? { threadCount } : {}),
     ...(lastStatsAtIso ? { lastStatsAtIso } : {}),
     ...(typeof record.statsStale === 'boolean' ? { statsStale: record.statsStale } : {}),
+    ...(connectorVersion ? { connectorVersion } : {}),
+    ...(runnerMode ? { runnerMode } : {}),
+    ...(platform ? { platform } : {}),
+    ...(hostname ? { hostname } : {}),
+    ...(typeof record.updateCapable === 'boolean' ? { updateCapable: record.updateCapable } : {}),
+    ...(typeof record.restartCapable === 'boolean' ? { restartCapable: record.restartCapable } : {}),
+    ...(lastTelemetryAtIso ? { lastTelemetryAtIso } : {}),
+    ...(latestReleaseVersion ? { latestReleaseVersion } : {}),
+    ...(latestReleasePublishedAtIso ? { latestReleasePublishedAtIso } : {}),
+    ...(latestReleaseReleaseNotesUrl ? { latestReleaseReleaseNotesUrl } : {}),
+    ...(updateStatus ? { updateStatus } : {}),
   }
 }
 
@@ -953,6 +1019,117 @@ export async function deleteConnectorRegistration(connectorId: string): Promise<
   }
   const envelope = asRecord(payload)
   return normalizeConnectorList(asRecord(envelope?.data))
+}
+
+function normalizeConnectorUpdateJob(payload: unknown): ConnectorUpdateJobInfo | null {
+  const record = asRecord(payload)
+  if (!record) return null
+  const id = readString(record.id)
+  const connectorId = readString(record.connectorId)
+  const serverId = readString(record.serverId)
+  const requestedAtIso = readString(record.requestedAtIso)
+  const actionRaw = readString(record.action)
+  const action = actionRaw === 'restart' || actionRaw === 'update' ? actionRaw : ''
+  const statusRaw = readString(record.status)
+  const status = statusRaw === 'queued'
+    || statusRaw === 'downloading'
+    || statusRaw === 'verifying'
+    || statusRaw === 'applying'
+    || statusRaw === 'restarting'
+    || statusRaw === 'healthy'
+    || statusRaw === 'failed'
+    ? statusRaw
+    : ''
+  if (!id || !connectorId || !serverId || !requestedAtIso || !action || !status) {
+    return null
+  }
+  const artifactRecord = asRecord(record.artifact)
+  return {
+    id,
+    connectorId,
+    serverId,
+    action,
+    status,
+    requestedAtIso,
+    ...(readString(record.startedAtIso) ? { startedAtIso: readString(record.startedAtIso) } : {}),
+    ...(readString(record.completedAtIso) ? { completedAtIso: readString(record.completedAtIso) } : {}),
+    ...(readString(record.targetVersion) ? { targetVersion: readString(record.targetVersion) } : {}),
+    ...(readString(record.connectorVersion) ? { connectorVersion: readString(record.connectorVersion) } : {}),
+    ...(readString(record.runnerMode) ? { runnerMode: readString(record.runnerMode) as ConnectorUpdateJobInfo['runnerMode'] } : {}),
+    ...(readString(record.errorMessage) ? { errorMessage: readString(record.errorMessage) } : {}),
+    ...(artifactRecord
+      ? {
+          artifact: {
+            version: readString(artifactRecord.version),
+            artifactUrl: readString(artifactRecord.artifactUrl),
+            sha256: readString(artifactRecord.sha256),
+            ...(readString(artifactRecord.releaseNotesUrl) ? { releaseNotesUrl: readString(artifactRecord.releaseNotesUrl) } : {}),
+            ...(readString(artifactRecord.publishedAtIso) ? { publishedAtIso: readString(artifactRecord.publishedAtIso) } : {}),
+          },
+        }
+      : {}),
+  }
+}
+
+function normalizeConnectorUpdateJobList(payload: unknown): ConnectorUpdateJobInfo[] {
+  const record = asRecord(payload)
+  const rows = Array.isArray(record?.jobs) ? record.jobs : Array.isArray(payload) ? payload : []
+  return rows
+    .map((row) => normalizeConnectorUpdateJob(row))
+    .filter((row): row is ConnectorUpdateJobInfo => row !== null)
+}
+
+export async function getConnectorUpdateJobs(connectorId: string): Promise<ConnectorUpdateJobInfo[]> {
+  const normalizedConnectorId = connectorId.trim()
+  const response = await fetch(`/codex-api/connectors/${encodeURIComponent(normalizedConnectorId)}/update-jobs`)
+  const payload = (await response.json()) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to load connector update jobs'))
+  }
+  const envelope = asRecord(payload)
+  return normalizeConnectorUpdateJobList(asRecord(envelope?.data))
+}
+
+export async function requestConnectorUpdate(connectorId: string, input: { targetVersion?: string } = {}): Promise<ConnectorUpdateJobInfo> {
+  const normalizedConnectorId = connectorId.trim()
+  const response = await fetch(`/codex-api/connectors/${encodeURIComponent(normalizedConnectorId)}/update-jobs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...(input.targetVersion?.trim() ? { targetVersion: input.targetVersion.trim() } : {}),
+    }),
+  })
+  const payload = (await response.json()) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to queue connector update'))
+  }
+  const envelope = asRecord(payload)
+  const data = asRecord(envelope?.data)
+  const job = normalizeConnectorUpdateJob(data?.job)
+  if (!job) {
+    throw new Error('Connector update request returned an incomplete response')
+  }
+  return job
+}
+
+export async function requestConnectorRestart(connectorId: string): Promise<ConnectorUpdateJobInfo> {
+  const normalizedConnectorId = connectorId.trim()
+  const response = await fetch(`/codex-api/connectors/${encodeURIComponent(normalizedConnectorId)}/restart`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+  const payload = (await response.json()) as unknown
+  if (!response.ok) {
+    throw new Error(getErrorMessageFromPayload(payload, 'Failed to queue connector restart'))
+  }
+  const envelope = asRecord(payload)
+  const data = asRecord(envelope?.data)
+  const job = normalizeConnectorUpdateJob(data?.job)
+  if (!job) {
+    throw new Error('Connector restart request returned an incomplete response')
+  }
+  return job
 }
 
 export type ThreadTitleCache = { titles: Record<string, string>; order: string[] }

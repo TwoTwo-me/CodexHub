@@ -1,5 +1,3 @@
-import { createManagedConnectorRunnerCommand } from './connectorManagedRuntime.js'
-
 export const CONNECTOR_NPM_PACKAGE_SPEC = 'github:TwoTwo-me/codexUI#main'
 export const CONNECTOR_BIN_NAME = 'codexui-connector'
 const MASKED_TOKEN_PLACEHOLDER = '••••••••••••••••'
@@ -31,6 +29,10 @@ function getPm2BinaryPath(): string {
 
 function getSystemdUnitName(connectorId: string): string {
   return `codexui-connector-${connectorId}.service`
+}
+
+export function createManagedConnectorRunnerCommand(connectorId: string): string {
+  return `$HOME/.config/codexui-connector/${connectorId}.sh`
 }
 
 function createConnectorExecPrefix(packageSpec = CONNECTOR_NPM_PACKAGE_SPEC): string[] {

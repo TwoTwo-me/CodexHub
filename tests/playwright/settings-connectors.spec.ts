@@ -22,13 +22,34 @@ type MockConnector = {
   createdAtIso: string
   updatedAtIso: string
   lastSeenAtIso?: string
+  connectorVersion?: string
+  runnerMode?: 'script' | 'systemd-user' | 'pm2-user' | 'manual' | 'unknown'
+  platform?: string
+  hostname?: string
+  updateCapable?: boolean
+  restartCapable?: boolean
+  lastTelemetryAtIso?: string
+  latestReleaseVersion?: string
+  latestReleasePublishedAtIso?: string
+  latestReleaseReleaseNotesUrl?: string
+  updateStatus?: 'unknown' | 'up_to_date' | 'update_available' | 'unsupported'
+}
+
+type MockConnectorJob = {
+  id: string
+  connectorId: string
+  serverId: string
+  action: 'restart' | 'update'
+  status: 'queued' | 'downloading' | 'verifying' | 'applying' | 'restarting' | 'healthy' | 'failed'
+  requestedAtIso: string
+  targetVersion?: string
 }
 
 function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true })
 }
 
-async function mockSettingsApi(page: Page, state: { connectors: MockConnector[]; latestToken: string }): Promise<void> {
+async function mockSettingsApi(page: Page, state: { connectors: MockConnector[]; latestToken: string; jobsByConnector: Record<string, MockConnectorJob[]> }): Promise<void> {
   await page.addInitScript(() => {
     window.localStorage.setItem('codex-web-local.sidebar-collapsed.v1', '0')
   })
@@ -189,6 +210,54 @@ async function mockSettingsApi(page: Page, state: { connectors: MockConnector[];
     })
   })
 
+  await page.route('**/codex-api/connectors/*/update-jobs', async (route) => {
+    const connectorId = route.request().url().split('/codex-api/connectors/')[1].split('/')[0]
+    if (route.request().method().toUpperCase() === 'POST') {
+      const connector = state.connectors.find((entry) => entry.id === connectorId)
+      const job: MockConnectorJob = {
+        id: `job-${connectorId}-update`,
+        connectorId,
+        serverId: connector?.serverId ?? connectorId,
+        action: 'update',
+        status: 'queued',
+        requestedAtIso: '2026-03-08T09:00:00.000Z',
+        targetVersion: connector?.latestReleaseVersion ?? '0.1.5',
+      }
+      state.jobsByConnector[connectorId] = [job]
+      await route.fulfill({
+        status: 201,
+        contentType: 'application/json',
+        body: JSON.stringify({ data: { job } }),
+      })
+      return
+    }
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { jobs: state.jobsByConnector[connectorId] ?? [] } }),
+    })
+  })
+
+  await page.route('**/codex-api/connectors/*/restart', async (route) => {
+    const connectorId = route.request().url().split('/codex-api/connectors/')[1].split('/')[0]
+    const connector = state.connectors.find((entry) => entry.id === connectorId)
+    const job: MockConnectorJob = {
+      id: `job-${connectorId}-restart`,
+      connectorId,
+      serverId: connector?.serverId ?? connectorId,
+      action: 'restart',
+      status: 'queued',
+      requestedAtIso: '2026-03-08T09:05:00.000Z',
+    }
+    state.jobsByConnector[connectorId] = [job, ...(state.jobsByConnector[connectorId] ?? [])]
+    await route.fulfill({
+      status: 201,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { job } }),
+    })
+  })
+
   await page.route('**/codex-api/connectors/*', async (route) => {
     const requestUrl = route.request().url()
     const connectorId = requestUrl.split('/codex-api/connectors/')[1]
@@ -245,9 +314,32 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
         createdAtIso: '2026-03-06T07:00:00.000Z',
         updatedAtIso: '2026-03-07T07:15:00.000Z',
         lastSeenAtIso: '2026-03-07T07:15:00.000Z',
+        connectorVersion: '0.1.4',
+        runnerMode: 'script',
+        platform: 'linux-x64',
+        updateCapable: true,
+        restartCapable: true,
+        lastTelemetryAtIso: '2026-03-07T07:15:00.000Z',
+        latestReleaseVersion: '0.1.5',
+        latestReleasePublishedAtIso: '2026-03-08T08:00:00.000Z',
+        latestReleaseReleaseNotesUrl: 'https://downloads.example.test/releases/0.1.5',
+        updateStatus: 'update_available',
       },
     ] as MockConnector[],
     latestToken: '',
+    jobsByConnector: {
+      'build-runner': [
+        {
+          id: 'job-build-runner-prev',
+          connectorId: 'build-runner',
+          serverId: 'build-runner',
+          action: 'update',
+          status: 'healthy',
+          requestedAtIso: '2026-03-07T08:00:00.000Z',
+          targetVersion: '0.1.4',
+        },
+      ],
+    } as Record<string, MockConnectorJob[]>,
   }
 
   await mockSettingsApi(page, state)
@@ -261,6 +353,14 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
   await expect(page.getByText('2 projects')).toBeVisible()
   await expect(page.getByText('4 threads')).toBeVisible()
   await expect(page.getByText('Connected').first()).toBeVisible()
+  await expect(page.locator('input[value="0.1.4"]').first()).toBeVisible()
+  await expect(page.locator('input[value="0.1.5"]').first()).toBeVisible()
+  await expect(page.getByText('Update available')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Restart connector' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Update connector' })).toBeVisible()
+  await page.getByRole('button', { name: 'Update connector' }).click()
+  await expect(page.getByText('job-build-runner-update').first()).toBeVisible()
+  await expect(page.getByText('Target version 0.1.5')).toBeVisible()
 
   await page.getByLabel('Connector name').fill('Alpha Laptop')
   await page.getByLabel('Connector id').fill('alpha-laptop')
@@ -322,6 +422,7 @@ test('settings page renders expired bootstrap state and recovery action', async 
       },
     ] as MockConnector[],
     latestToken: '',
+    jobsByConnector: {} as Record<string, MockConnectorJob[]>,
   }
 
   await mockSettingsApi(page, state)
