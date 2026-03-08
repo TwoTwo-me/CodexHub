@@ -6,7 +6,7 @@ import { Command } from 'commander'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import {
-  createConnectorConnectCommand,
+  CONNECTOR_NPM_PACKAGE_SPEC,
   createConnectorInstallCommand,
   createConnectorPm2RegistrationCommand,
   createConnectorSystemdUserRegistrationCommand,
@@ -15,14 +15,37 @@ import { CodexUiConnectorAppServer } from './codexUiConnectorAppServer.js'
 import { LocalCodexAppServer } from './localCodexAppServer.js'
 import {
   CodexRelayConnector,
+  RelayConnectorControlSignal,
   type RelayConnectorAppServer,
   type RelayConnectorE2eeConfig,
   type RelayConnectorSession,
   type RelayConnectorTransport,
 } from './core.js'
 import { normalizeHubAddress } from '../utils/hubAddress.js'
+import {
+  applyManagedConnectorJob,
+  createManagedConnectorRuntimeBundle,
+  finalizeManagedConnectorJob,
+  readManagedConnectorRuntimeState,
+  type ManagedConnectorJobRecord,
+  type ManagedConnectorJobStatusUpdate,
+} from './managedUpdates.js'
+import {
+  createManagedConnectorRunnerCommand,
+  isManagedConnectorRunnerMode,
+  type ConnectorRunnerMode,
+} from '../shared/connectorManagedRuntime.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+export {
+  applyManagedConnectorJob,
+  createManagedConnectorRuntimeBundle,
+  createManagedConnectorRuntimeState,
+  finalizeManagedConnectorJob,
+  readManagedConnectorRuntimeState,
+  writeManagedConnectorRuntimeState,
+} from './managedUpdates.js'
 
 async function readConnectorVersion(): Promise<string> {
   try {
@@ -144,11 +167,13 @@ function buildAuthorizationHeader(token: string): Record<string, string> {
 
 export class HttpRelayHubTransport implements RelayConnectorTransport {
   private readonly hubAddress: string
+  private readonly connectPayload?: Record<string, unknown>
 
-  constructor(hubAddress: string, options?: { allowInsecureHttp?: boolean }) {
+  constructor(hubAddress: string, options?: { allowInsecureHttp?: boolean; connectPayload?: Record<string, unknown> }) {
     this.hubAddress = normalizeHubAddress(hubAddress, {
       allowInsecureHttp: options?.allowInsecureHttp === true,
     })
+    this.connectPayload = options?.connectPayload && typeof options.connectPayload === 'object' ? options.connectPayload : undefined
     if (!this.hubAddress) {
       throw createHubAddressError()
     }
@@ -160,7 +185,9 @@ export class HttpRelayHubTransport implements RelayConnectorTransport {
       headers: {
         ...buildAuthorizationHeader(token),
         Accept: 'application/json',
+        ...(this.connectPayload ? { 'Content-Type': 'application/json' } : {}),
       },
+      ...(this.connectPayload ? { body: JSON.stringify(this.connectPayload) } : {}),
     })
     const payload = await parseJsonResponse(response)
     if (!response.ok) {
@@ -368,7 +395,7 @@ async function writeExecutableScript(path: string, body: string): Promise<void> 
 
 async function writeConnectorHelperScripts(input: {
   connectorId: string
-  connectCommand: string
+  startCommand: string
   systemdRegistrationCommand: string
   pm2RegistrationCommand: string
 }): Promise<{
@@ -393,7 +420,8 @@ async function writeConnectorHelperScripts(input: {
     'set -euo pipefail',
     '',
     sudoGuardLines,
-    `exec ${input.connectCommand}`,
+    'export CODEXUI_CONNECTOR_RUNNER_MODE_OVERRIDE=script',
+    `exec ${input.startCommand}`,
     '',
   ].join('\n'))
   await writeExecutableScript(systemdScriptPath, [
@@ -574,6 +602,147 @@ function createLogger(verbose: boolean): (level: string, message: string) => voi
   }
 }
 
+type ConnectorTelemetry = {
+  connectorVersion: string
+  runnerMode: ConnectorRunnerMode
+  platform: string
+  hostname: string
+  updateCapable: boolean
+  restartCapable: boolean
+}
+
+function resolveRunnerMode(input: {
+  runnerMode?: ConnectorRunnerMode
+  runtimeStateFile?: string
+}): ConnectorRunnerMode {
+  if (input.runnerMode) {
+    return input.runnerMode
+  }
+  if (input.runtimeStateFile?.trim()) {
+    return 'script'
+  }
+  return 'manual'
+}
+
+async function buildConnectorTelemetry(input: {
+  runnerMode?: ConnectorRunnerMode
+  runtimeStateFile?: string
+  relayE2ee?: RelayConnectorE2eeConfig
+}): Promise<ConnectorTelemetry> {
+  const runnerMode = resolveRunnerMode(input)
+  const managedRuntime = input.runtimeStateFile?.trim().length
+    ? await readManagedConnectorRuntimeState(input.runtimeStateFile.trim())
+    : null
+  const canSelfManage = isManagedConnectorRunnerMode(runnerMode)
+    && !!managedRuntime
+    && !input.relayE2ee
+  return {
+    connectorVersion: await readConnectorVersion(),
+    runnerMode,
+    platform: `${process.platform}-${process.arch}`,
+    hostname: process.env.HOSTNAME?.trim() || '',
+    updateCapable: canSelfManage,
+    restartCapable: canSelfManage,
+  }
+}
+
+async function pollManagedConnectorJob(input: {
+  hubAddress: string
+  token: string
+  allowInsecureHttp?: boolean
+  telemetry: ConnectorTelemetry
+}): Promise<ManagedConnectorJobRecord | null> {
+  const hubAddress = normalizeHubAddress(input.hubAddress, {
+    allowInsecureHttp: input.allowInsecureHttp === true,
+  })
+  if (!hubAddress) {
+    throw createHubAddressError()
+  }
+  const response = await fetch(`${hubAddress}/codex-api/connector-agent/jobs/poll`, {
+    method: 'POST',
+    headers: {
+      ...buildAuthorizationHeader(input.token),
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input.telemetry),
+  })
+  const payload = await parseJsonResponse(response)
+  if (!response.ok) {
+    throw createRelayHttpError(response, payload, `Connector job poll failed with HTTP ${String(response.status)}`)
+  }
+  const data = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>).data as Record<string, unknown>
+    : null
+  const job = data && typeof data.job === 'object' && !Array.isArray(data.job)
+    ? data.job as Record<string, unknown>
+    : null
+  if (!job) {
+    return null
+  }
+
+  const id = typeof job.id === 'string' ? job.id.trim() : ''
+  const action = job.action === 'update' ? 'update' : job.action === 'restart' ? 'restart' : ''
+  if (!id || !action) {
+    return null
+  }
+  const artifactRecord = job.artifact && typeof job.artifact === 'object' && !Array.isArray(job.artifact)
+    ? job.artifact as Record<string, unknown>
+    : null
+  return {
+    id,
+    action,
+    ...(typeof job.targetVersion === 'string' && job.targetVersion.trim().length > 0 ? { targetVersion: job.targetVersion.trim() } : {}),
+    ...(artifactRecord
+      && typeof artifactRecord.version === 'string'
+      && typeof artifactRecord.artifactUrl === 'string'
+      && typeof artifactRecord.sha256 === 'string'
+      ? {
+          artifact: {
+            version: artifactRecord.version.trim(),
+            artifactUrl: artifactRecord.artifactUrl.trim(),
+            sha256: artifactRecord.sha256.trim(),
+          },
+        }
+      : {}),
+  }
+}
+
+async function reportManagedConnectorJobStatus(input: {
+  hubAddress: string
+  token: string
+  jobId: string
+  allowInsecureHttp?: boolean
+  telemetry: ConnectorTelemetry
+  update: ManagedConnectorJobStatusUpdate
+}): Promise<void> {
+  const hubAddress = normalizeHubAddress(input.hubAddress, {
+    allowInsecureHttp: input.allowInsecureHttp === true,
+  })
+  if (!hubAddress) {
+    throw createHubAddressError()
+  }
+  const response = await fetch(`${hubAddress}/codex-api/connector-agent/jobs/${encodeURIComponent(input.jobId)}/status`, {
+    method: 'POST',
+    headers: {
+      ...buildAuthorizationHeader(input.token),
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      ...input.telemetry,
+      status: input.update.status,
+      ...(input.update.connectorVersion ? { connectorVersion: input.update.connectorVersion } : {}),
+      ...(input.update.runnerMode ? { runnerMode: input.update.runnerMode } : {}),
+      ...(input.update.errorMessage ? { errorMessage: input.update.errorMessage } : {}),
+    }),
+  })
+  const payload = await parseJsonResponse(response)
+  if (!response.ok) {
+    throw createRelayHttpError(response, payload, `Connector job status update failed with HTTP ${String(response.status)}`)
+  }
+}
+
 async function runConnectorLoop(input: {
   hubAddress: string
   token: string
@@ -581,6 +750,9 @@ async function runConnectorLoop(input: {
   relayE2ee?: RelayConnectorE2eeConfig
   verbose: boolean
   allowInsecureHttp?: boolean
+  runnerMode?: ConnectorRunnerMode
+  runtimeStateFile?: string
+  packageSpec?: string
 }): Promise<void> {
   if (!hasCodexAuth()) {
     throw new Error('Codex auth.json is missing on the connector host. Run `codex login` first.')
@@ -592,8 +764,14 @@ async function runConnectorLoop(input: {
   const normalizedHubAddress = normalizeHubAddress(input.hubAddress, {
     allowInsecureHttp: input.allowInsecureHttp === true,
   })
+  const telemetry = await buildConnectorTelemetry({
+    runnerMode: input.runnerMode,
+    runtimeStateFile: input.runtimeStateFile,
+    relayE2ee: input.relayE2ee,
+  })
   const transport = new HttpRelayHubTransport(input.hubAddress, {
     allowInsecureHttp: input.allowInsecureHttp === true,
+    connectPayload: telemetry,
   })
   const connector = new CodexRelayConnector({
     token: input.token,
@@ -602,6 +780,87 @@ async function runConnectorLoop(input: {
     connectorId: input.connectorId,
     ...(input.relayE2ee ? { relayE2ee: input.relayE2ee } : {}),
     onLog: (level, message) => logger(level, message),
+    afterPoll: async () => {
+      if (!input.runtimeStateFile?.trim()) {
+        return
+      }
+
+      try {
+        const currentState = await readManagedConnectorRuntimeState(input.runtimeStateFile.trim())
+        if (currentState?.pendingJobId) {
+          const finalizeResult = await finalizeManagedConnectorJob({
+            runtimeStateFile: input.runtimeStateFile.trim(),
+            currentVersion: telemetry.connectorVersion,
+          }, {
+            reportStatus: async (update) => {
+              await reportManagedConnectorJobStatus({
+                hubAddress: input.hubAddress,
+                token: input.token,
+                jobId: currentState.pendingJobId!,
+                allowInsecureHttp: input.allowInsecureHttp === true,
+                telemetry,
+                update,
+              })
+            },
+          })
+          if (finalizeResult.restartRequested) {
+            throw new RelayConnectorControlSignal('restart')
+          }
+        }
+
+        if (!telemetry.updateCapable && !telemetry.restartCapable) {
+          return
+        }
+        const job = await pollManagedConnectorJob({
+          hubAddress: input.hubAddress,
+          token: input.token,
+          allowInsecureHttp: input.allowInsecureHttp === true,
+          telemetry,
+        })
+        if (!job) {
+          return
+        }
+        try {
+          const result = await applyManagedConnectorJob({
+            runtimeStateFile: input.runtimeStateFile.trim(),
+            job,
+          }, {
+            reportStatus: async (update) => {
+              await reportManagedConnectorJobStatus({
+                hubAddress: input.hubAddress,
+                token: input.token,
+                jobId: job.id,
+                allowInsecureHttp: input.allowInsecureHttp === true,
+                telemetry,
+                update,
+              })
+            },
+          })
+          if (result.restartRequested) {
+            throw new RelayConnectorControlSignal('restart')
+          }
+        } catch (error) {
+          await reportManagedConnectorJobStatus({
+            hubAddress: input.hubAddress,
+            token: input.token,
+            jobId: job.id,
+            allowInsecureHttp: input.allowInsecureHttp === true,
+            telemetry,
+            update: {
+              status: 'failed',
+              connectorVersion: telemetry.connectorVersion,
+              runnerMode: telemetry.runnerMode,
+              errorMessage: error instanceof Error ? error.message : 'Managed connector job failed',
+            },
+          })
+        }
+      } catch (error) {
+        if (error instanceof RelayConnectorControlSignal) {
+          throw error
+        }
+        logger('warn', error instanceof Error ? error.message : 'Managed connector control plane failed')
+      }
+    },
   })
 
   const shutdown = () => {
@@ -611,7 +870,16 @@ async function runConnectorLoop(input: {
   process.on('SIGTERM', shutdown)
 
   logger('info', `Starting connector ${input.connectorId} against ${normalizedHubAddress}`)
-  await connector.run()
+  try {
+    await connector.run()
+  } catch (error) {
+    connector.dispose()
+    if (error instanceof RelayConnectorControlSignal && error.code === 'restart') {
+      process.exitCode = 75
+      return
+    }
+    throw error
+  }
 }
 
 async function resolveConnectToken(options: {
@@ -758,6 +1026,9 @@ async function runCli(argv: string[]): Promise<void> {
     .option('--token-stdin', 'Read the connector relay token from stdin')
     .option('--key-id <keyId>', 'Relay E2EE key id')
     .option('--passphrase <passphrase>', 'Relay E2EE passphrase')
+    .option('--runner-mode <mode>', 'Connector runner mode (manual, script, systemd-user, pm2-user)')
+    .option('--runtime-state-file <path>', 'Managed runtime state file path')
+    .option('--package-spec <spec>', 'Package spec recorded in the managed runtime state')
     .option('--allow-insecure-http', 'Allow plaintext HTTP for non-loopback hubs (lab use only)', false)
     .option('--verbose', 'Enable verbose logging', false)
     .action(async (options: {
@@ -768,6 +1039,9 @@ async function runCli(argv: string[]): Promise<void> {
       tokenStdin?: boolean
       keyId?: string
       passphrase?: string
+      runnerMode?: ConnectorRunnerMode
+      runtimeStateFile?: string
+      packageSpec?: string
       allowInsecureHttp?: boolean
       verbose?: boolean
     }) => {
@@ -785,6 +1059,9 @@ async function runCli(argv: string[]): Promise<void> {
         ...(relayE2ee ? { relayE2ee } : {}),
         allowInsecureHttp: options.allowInsecureHttp === true,
         verbose: options.verbose === true,
+        ...(options.runnerMode ? { runnerMode: options.runnerMode } : {}),
+        ...(options.runtimeStateFile?.trim() ? { runtimeStateFile: options.runtimeStateFile.trim() } : {}),
+        ...(options.packageSpec?.trim() ? { packageSpec: options.packageSpec.trim() } : {}),
       })
     })
 
@@ -825,15 +1102,20 @@ async function runCli(argv: string[]): Promise<void> {
 
       console.log('Connector bootstrap exchange complete.\n')
       console.log(`Connector: ${installed.connector.name} (${installed.connector.id})`)
+      let managedRuntimeStatePath: string | undefined
       if (installed.tokenFilePath) {
-        console.log(`Credential file updated: ${installed.tokenFilePath}`)
-        const connectCommand = createConnectorConnectCommand({
-          hubAddress: options.hub,
+        const managedRuntime = await createManagedConnectorRuntimeBundle({
           connectorId: options.connector,
-          tokenFilePath: options.tokenFile?.trim() || `$HOME/.codexui-connector/${options.connector}.token`,
-          ...(installed.connector.relayE2eeKeyId ? { relayE2eeKeyId: installed.connector.relayE2eeKeyId } : {}),
+          hubAddress: options.hub,
+          tokenFilePath: installed.tokenFilePath,
+          runnerMode: 'script',
           allowInsecureHttp: options.allowInsecureHttp === true,
+          currentVersion: version,
+          ...(installed.connector.relayE2eeKeyId ? { relayE2eeKeyId: installed.connector.relayE2eeKeyId } : {}),
         })
+        managedRuntimeStatePath = managedRuntime.statePath
+        const startCommand = createManagedConnectorRunnerCommand(options.connector)
+        console.log(`Credential file updated: ${installed.tokenFilePath}`)
         const systemdRegistrationCommand = createConnectorSystemdUserRegistrationCommand({
           hubAddress: options.hub,
           connectorId: options.connector,
@@ -850,12 +1132,12 @@ async function runCli(argv: string[]): Promise<void> {
         })
         const helperScripts = await writeConnectorHelperScripts({
           connectorId: options.connector,
-          connectCommand,
+          startCommand,
           systemdRegistrationCommand,
           pm2RegistrationCommand,
         })
         console.log('\nStart or restart the connector with:')
-        console.log(connectCommand)
+        console.log(startCommand)
         console.log('\nCreated helper scripts in:')
         console.log(helperScripts.directory)
         console.log(`- start: ${helperScripts.startScriptPath}`)
@@ -879,6 +1161,9 @@ async function runCli(argv: string[]): Promise<void> {
           ...(relayE2ee ? { relayE2ee } : {}),
           allowInsecureHttp: options.allowInsecureHttp === true,
           verbose: options.verbose === true,
+          runnerMode: 'script',
+          ...(managedRuntimeStatePath ? { runtimeStateFile: managedRuntimeStatePath } : {}),
+          packageSpec: CONNECTOR_NPM_PACKAGE_SPEC,
         })
       }
     })
@@ -984,7 +1269,6 @@ function isMainModule(): boolean {
 export { CodexRelayConnector } from './core.js'
 export { LocalCodexAppServer } from './localCodexAppServer.js'
 export {
-  createConnectorConnectCommand,
   createConnectorInstallCommand,
   CONNECTOR_NPM_PACKAGE_SPEC,
 } from '../shared/connectorInstallCommand.js'

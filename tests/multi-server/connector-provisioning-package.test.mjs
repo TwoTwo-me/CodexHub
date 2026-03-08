@@ -183,6 +183,7 @@ test('connector install command refuses bootstrap input that would discard the d
 test('connector install CLI accepts inline bootstrap token when a token file is provided for credential persistence', async () => {
   const connectorEntrypoint = resolve(repoDir, 'dist-cli/connector.js')
   const tempDir = await mkdtemp(resolve(tmpdir(), 'codexui-inline-install-'))
+  const fakeHome = await mkdtemp(resolve(tmpdir(), 'codexui-inline-home-'))
   const tokenFilePath = resolve(tempDir, 'edge-laptop.token')
   const installCwd = resolve(tempDir, 'install-artifacts')
   await mkdir(installCwd, { recursive: true })
@@ -238,6 +239,7 @@ test('connector install CLI accepts inline bootstrap token when a token file is 
           env: {
             ...process.env,
             NO_COLOR: '1',
+            HOME: fakeHome,
           },
           stdio: ['ignore', 'pipe', 'pipe'],
         },
@@ -262,6 +264,7 @@ test('connector install CLI accepts inline bootstrap token when a token file is 
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
     assert.match(`${result.stdout}\n${result.stderr}`, /Credential file updated:/)
     assert.match(result.stdout, /Start or restart the connector with:/)
+    assert.match(result.stdout, /\$HOME\/\.config\/codexui-connector\/edge-laptop\.sh/)
     assert.match(result.stdout, /Created helper scripts in:/)
     assert.match(result.stdout, /codexui-connector-edge-laptop-start\.sh/)
     assert.match(result.stdout, /codexui-connector-edge-laptop-systemd\.sh/)
@@ -271,9 +274,16 @@ test('connector install CLI accepts inline bootstrap token when a token file is 
     const startScript = await readFile(resolve(installCwd, 'codexui-connector-edge-laptop-start.sh'), 'utf8')
     const systemdScript = await readFile(resolve(installCwd, 'codexui-connector-edge-laptop-systemd.sh'), 'utf8')
     const pm2Script = await readFile(resolve(installCwd, 'codexui-connector-edge-laptop-pm2.sh'), 'utf8')
-    assert.match(startScript, /codexui-connector connect/)
+    const managedRunnerScript = await readFile(resolve(fakeHome, '.config/codexui-connector/edge-laptop.sh'), 'utf8')
+    const managedRunnerState = JSON.parse(await readFile(resolve(fakeHome, '.config/codexui-connector/edge-laptop.state.json'), 'utf8'))
+    assert.match(startScript, /\$HOME\/\.config\/codexui-connector\/edge-laptop\.sh/)
+    assert.match(startScript, /CODEXUI_CONNECTOR_RUNNER_MODE_OVERRIDE=script/)
     assert.match(startScript, /Run this script as the target user without sudo\./)
-    assert.match(startScript, /--token-file/)
+    assert.match(managedRunnerScript, /npm exec --yes --package=/)
+    assert.match(managedRunnerScript, /--runtime-state-file/)
+    assert.equal(managedRunnerState.connectorId, 'edge-laptop')
+    assert.equal(managedRunnerState.packageSpec, 'github:TwoTwo-me/codexUI#main')
+    assert.equal(managedRunnerState.tokenFilePath, tokenFilePath)
     assert.match(systemdScript, /systemctl --user enable --now codexui-connector-edge-laptop\.service/)
     assert.doesNotMatch(systemdScript, /\nloginctl enable-linger /)
     assert.match(systemdScript, /sudo loginctl enable-linger \$USER/)

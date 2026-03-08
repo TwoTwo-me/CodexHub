@@ -228,6 +228,12 @@ function isPublicRelayAgentPath(path: string, method: string): boolean {
   if (method === 'POST' && path === '/codex-api/relay/agent/connect') {
     return true
   }
+  if (method === 'POST' && path === '/codex-api/connector-agent/jobs/poll') {
+    return true
+  }
+  if (method === 'POST' && /^\/codex-api\/connector-agent\/jobs\/[^/]+\/status$/u.test(path)) {
+    return true
+  }
   if (method === 'GET' && path === '/codex-api/relay/agent/pull') {
     return true
   }

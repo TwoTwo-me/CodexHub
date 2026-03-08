@@ -43,6 +43,23 @@ import {
   SERVER_SKILLS_INSTALL_METHOD,
   SERVER_SKILLS_UNINSTALL_METHOD,
 } from '../shared/serverSkillsBridge.js'
+import type { ConnectorRunnerMode } from '../shared/connectorManagedRuntime.js'
+import {
+  createConnectorUpdateJob,
+  deriveConnectorUpdateStatus,
+  hasActiveConnectorUpdateJob,
+  readConnectorReleaseCatalog,
+  readConnectorUpdateJobs,
+  resolveLatestCompatibleConnectorRelease,
+  toPublicConnectorUpdateJob,
+  writeConnectorReleaseCatalog,
+  writeConnectorUpdateJobs,
+  type ConnectorReleaseRecord,
+  type ConnectorUpdateJobAction,
+  type ConnectorUpdateJobRecord,
+  type ConnectorUpdateJobStatus,
+  type ConnectorUpdateStatus,
+} from './connectorUpdateStore.js'
 import { normalizeHubAddress } from '../utils/hubAddress.js'
 
 type JsonRpcCall = {
@@ -135,6 +152,13 @@ type CodexConnectorRecord = {
   lastKnownProjectCount?: number
   lastKnownThreadCount?: number
   lastStatsAtIso?: string
+  connectorVersion?: string
+  runnerMode?: ConnectorRunnerMode
+  platform?: string
+  hostname?: string
+  updateCapable?: boolean
+  restartCapable?: boolean
+  lastTelemetryAtIso?: string
   createdAtIso: string
   updatedAtIso: string
 }
@@ -159,6 +183,17 @@ type CodexConnectorPublicRecord = {
   threadCount?: number
   lastStatsAtIso?: string
   statsStale?: boolean
+  connectorVersion?: string
+  runnerMode?: ConnectorRunnerMode
+  platform?: string
+  hostname?: string
+  updateCapable?: boolean
+  restartCapable?: boolean
+  lastTelemetryAtIso?: string
+  latestReleaseVersion?: string
+  latestReleasePublishedAtIso?: string
+  latestReleaseReleaseNotesUrl?: string
+  updateStatus?: ConnectorUpdateStatus
 }
 
 type ConnectorRegistryState = {
@@ -783,6 +818,86 @@ export function normalizeServerRegistryState(value: unknown, nowIso = new Date()
   }
 }
 
+type ConnectorTelemetrySnapshot = {
+  connectorVersion?: string
+  runnerMode?: ConnectorRunnerMode
+  platform?: string
+  hostname?: string
+  updateCapable?: boolean
+  restartCapable?: boolean
+  lastTelemetryAtIso?: string
+}
+
+function normalizeConnectorRunnerMode(value: unknown): ConnectorRunnerMode | undefined {
+  return value === 'script'
+    || value === 'systemd-user'
+    || value === 'pm2-user'
+    || value === 'manual'
+    || value === 'unknown'
+    ? value
+    : undefined
+}
+
+function normalizeConnectorTelemetrySnapshot(value: unknown, fallbackIso = new Date().toISOString()): ConnectorTelemetrySnapshot {
+  const record = asRecord(value)
+  if (!record) {
+    return {}
+  }
+
+  const connectorVersion = typeof record.connectorVersion === 'string' && record.connectorVersion.trim().length > 0
+    ? record.connectorVersion.trim()
+    : undefined
+  const runnerMode = normalizeConnectorRunnerMode(record.runnerMode)
+  const platform = typeof record.platform === 'string' && record.platform.trim().length > 0
+    ? record.platform.trim()
+    : undefined
+  const hostname = typeof record.hostname === 'string' && record.hostname.trim().length > 0
+    ? record.hostname.trim()
+    : undefined
+  const updateCapable = typeof record.updateCapable === 'boolean' ? record.updateCapable : undefined
+  const restartCapable = typeof record.restartCapable === 'boolean' ? record.restartCapable : undefined
+  const hasTelemetry = !!(
+    connectorVersion
+    || runnerMode
+    || platform
+    || hostname
+    || updateCapable !== undefined
+    || restartCapable !== undefined
+  )
+
+  return {
+    ...(connectorVersion ? { connectorVersion } : {}),
+    ...(runnerMode ? { runnerMode } : {}),
+    ...(platform ? { platform } : {}),
+    ...(hostname ? { hostname } : {}),
+    ...(updateCapable !== undefined ? { updateCapable } : {}),
+    ...(restartCapable !== undefined ? { restartCapable } : {}),
+    ...(hasTelemetry ? { lastTelemetryAtIso: fallbackIso } : {}),
+  }
+}
+
+function applyConnectorTelemetrySnapshot(
+  connector: CodexConnectorRecord,
+  telemetry: ConnectorTelemetrySnapshot,
+  updatedAtIso = new Date().toISOString(),
+): CodexConnectorRecord {
+  if (Object.keys(telemetry).length === 0) {
+    return connector
+  }
+
+  return {
+    ...connector,
+    ...(telemetry.connectorVersion ? { connectorVersion: telemetry.connectorVersion } : {}),
+    ...(telemetry.runnerMode ? { runnerMode: telemetry.runnerMode } : {}),
+    ...(telemetry.platform ? { platform: telemetry.platform } : {}),
+    ...(telemetry.hostname ? { hostname: telemetry.hostname } : {}),
+    ...(telemetry.updateCapable !== undefined ? { updateCapable: telemetry.updateCapable } : {}),
+    ...(telemetry.restartCapable !== undefined ? { restartCapable: telemetry.restartCapable } : {}),
+    ...(telemetry.lastTelemetryAtIso ? { lastTelemetryAtIso: telemetry.lastTelemetryAtIso } : {}),
+    updatedAtIso,
+  }
+}
+
 function normalizeConnectorRecord(value: unknown, nowIso: string): CodexConnectorRecord | null {
   const record = asRecord(value)
   if (!record) return null
@@ -848,6 +963,7 @@ function normalizeConnectorRecord(value: unknown, nowIso: string): CodexConnecto
   const lastStatsAtIso = typeof record.lastStatsAtIso === 'string' && record.lastStatsAtIso.trim().length > 0
     ? record.lastStatsAtIso.trim()
     : undefined
+  const telemetry = normalizeConnectorTelemetrySnapshot(record, nowIso)
   const createdAtIso = typeof record.createdAtIso === 'string' && record.createdAtIso.trim().length > 0
     ? record.createdAtIso.trim()
     : nowIso
@@ -872,6 +988,13 @@ function normalizeConnectorRecord(value: unknown, nowIso: string): CodexConnecto
     ...(lastKnownProjectCount !== undefined ? { lastKnownProjectCount } : {}),
     ...(lastKnownThreadCount !== undefined ? { lastKnownThreadCount } : {}),
     ...(lastStatsAtIso ? { lastStatsAtIso } : {}),
+    ...(telemetry.connectorVersion ? { connectorVersion: telemetry.connectorVersion } : {}),
+    ...(telemetry.runnerMode ? { runnerMode: telemetry.runnerMode } : {}),
+    ...(telemetry.platform ? { platform: telemetry.platform } : {}),
+    ...(telemetry.hostname ? { hostname: telemetry.hostname } : {}),
+    ...(telemetry.updateCapable !== undefined ? { updateCapable: telemetry.updateCapable } : {}),
+    ...(telemetry.restartCapable !== undefined ? { restartCapable: telemetry.restartCapable } : {}),
+    ...(telemetry.lastTelemetryAtIso ? { lastTelemetryAtIso: telemetry.lastTelemetryAtIso } : {}),
     createdAtIso,
     updatedAtIso,
   }
@@ -1239,6 +1362,49 @@ async function findConnectorByBootstrapToken(
   return null
 }
 
+async function findConnectorByCredentialToken(token: string): Promise<ConnectorRegistryLookup | null> {
+  const normalizedToken = token.trim()
+  if (!normalizedToken) return null
+  const tokenHash = hashConnectorSecret(normalizedToken)
+  const payload = await readCodexGlobalStatePayload()
+  const nowIso = new Date().toISOString()
+
+  const globalRegistry = normalizeConnectorRegistryState(payload[CONNECTOR_REGISTRY_STATE_KEY], nowIso)
+  const globalIndex = globalRegistry.connectors.findIndex((connector) => connector.credentialHash === tokenHash)
+  if (globalIndex >= 0) {
+    return {
+      scope: { cacheKey: 'global', userId: null },
+      state: globalRegistry,
+      connector: globalRegistry.connectors[globalIndex],
+      index: globalIndex,
+    }
+  }
+
+  const perUserPayload = asRecord(payload[CONNECTOR_REGISTRY_STATE_BY_USER_KEY]) ?? {}
+  for (const [userId, rawRegistry] of Object.entries(perUserPayload)) {
+    const registry = normalizeConnectorRegistryState(rawRegistry, nowIso)
+    const connectorIndex = registry.connectors.findIndex((connector) => connector.credentialHash === tokenHash)
+    if (connectorIndex === -1) continue
+    return {
+      scope: { cacheKey: `user:${userId}`, userId },
+      state: registry,
+      connector: registry.connectors[connectorIndex],
+      index: connectorIndex,
+    }
+  }
+
+  return null
+}
+
+async function persistConnectorLookupUpdate(
+  lookup: ConnectorRegistryLookup,
+  nextConnector: CodexConnectorRecord,
+): Promise<void> {
+  const nextConnectors = [...lookup.state.connectors]
+  nextConnectors[lookup.index] = nextConnector
+  await writeConnectorRegistryState(lookup.scope, { connectors: nextConnectors })
+}
+
 function buildServerIdSeed(value: string): string {
   const lowered = value.toLowerCase().trim()
   const collapsed = lowered
@@ -1435,6 +1601,10 @@ async function buildConnectorPublicRecords(
         threadCount,
         lastStatsAtIso,
         ...(includeStats ? { statsStale } : {}),
+        latestRelease: resolveLatestCompatibleConnectorRelease({
+          runnerMode: nextConnector.runnerMode,
+          platform: nextConnector.platform,
+        }),
       }),
     }
   }))
@@ -1454,10 +1624,21 @@ function toPublicConnectorRecord(
     threadCount?: number
     lastStatsAtIso?: string
     statsStale?: boolean
+    latestRelease?: ConnectorReleaseRecord | null
   } = {},
 ): CodexConnectorPublicRecord {
   const relayAgent = relayHub.getAgent(connector.relayAgentId)
   const connected = relayAgent?.connected ?? false
+  const latestRelease = options.latestRelease
+    ?? resolveLatestCompatibleConnectorRelease({
+      runnerMode: connector.runnerMode,
+      platform: connector.platform,
+    })
+  const updateStatus = deriveConnectorUpdateStatus({
+    currentVersion: connector.connectorVersion,
+    updateCapable: connector.updateCapable,
+    latestRelease,
+  })
   return {
     id: connector.id,
     serverId: connector.serverId,
@@ -1478,7 +1659,52 @@ function toPublicConnectorRecord(
     ...(options.threadCount !== undefined ? { threadCount: options.threadCount } : {}),
     ...(options.lastStatsAtIso ? { lastStatsAtIso: options.lastStatsAtIso } : {}),
     ...(options.statsStale !== undefined ? { statsStale: options.statsStale } : {}),
+    ...(connector.connectorVersion ? { connectorVersion: connector.connectorVersion } : {}),
+    ...(connector.runnerMode ? { runnerMode: connector.runnerMode } : {}),
+    ...(connector.platform ? { platform: connector.platform } : {}),
+    ...(connector.hostname ? { hostname: connector.hostname } : {}),
+    ...(connector.updateCapable !== undefined ? { updateCapable: connector.updateCapable } : {}),
+    ...(connector.restartCapable !== undefined ? { restartCapable: connector.restartCapable } : {}),
+    ...(connector.lastTelemetryAtIso ? { lastTelemetryAtIso: connector.lastTelemetryAtIso } : {}),
+    ...(latestRelease?.version ? { latestReleaseVersion: latestRelease.version } : {}),
+    ...(latestRelease?.publishedAtIso ? { latestReleasePublishedAtIso: latestRelease.publishedAtIso } : {}),
+    ...(latestRelease?.releaseNotesUrl ? { latestReleaseReleaseNotesUrl: latestRelease.releaseNotesUrl } : {}),
+    updateStatus,
   }
+}
+
+function isManagedConnectorRunnerModeForHub(value: ConnectorRunnerMode | undefined): value is 'script' | 'systemd-user' | 'pm2-user' {
+  return value === 'script' || value === 'systemd-user' || value === 'pm2-user'
+}
+
+function findCompatibleConnectorRelease(
+  connector: CodexConnectorRecord,
+  targetVersion?: string,
+): ConnectorReleaseRecord | null {
+  if (targetVersion?.trim()) {
+    const normalizedTargetVersion = targetVersion.trim()
+    return readConnectorReleaseCatalog().find((release) => {
+      if (release.version !== normalizedTargetVersion) return false
+      const latestCompatible = resolveLatestCompatibleConnectorRelease({
+        runnerMode: connector.runnerMode,
+        platform: connector.platform,
+      })
+      if (latestCompatible?.version === release.version) return true
+      const runnerCompatible = !release.runnerModes || release.runnerModes.length === 0 || !!connector.runnerMode && release.runnerModes.includes(connector.runnerMode)
+      const normalizedPlatform = connector.platform?.toLowerCase() ?? ''
+      const platformSeed = normalizedPlatform.split('-', 1)[0] ?? normalizedPlatform
+      const platformCompatible = !release.platforms
+        || release.platforms.length === 0
+        || release.platforms.includes(normalizedPlatform)
+        || release.platforms.includes(platformSeed)
+      return runnerCompatible && platformCompatible
+    }) ?? null
+  }
+
+  return resolveLatestCompatibleConnectorRelease({
+    runnerMode: connector.runnerMode,
+    platform: connector.platform,
+  })
 }
 
 async function syncRelayHubPersistedAgents(relayHub: OutboundRelayHub): Promise<void> {
@@ -3000,6 +3226,61 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/codex-api/connectors/releases') {
+        const authenticatedUser = getRequestAuthenticatedUser(req)
+        if (!authenticatedUser) {
+          setJson(res, 401, { error: 'Authentication required' })
+          return
+        }
+
+        setJson(res, 200, {
+          data: {
+            releases: readConnectorReleaseCatalog(),
+          },
+        })
+        return
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/codex-api/admin/connectors/releases') {
+        requireAdminUser(req)
+        const payload = asRecord(await readJsonBody(req))
+        const releases = Array.isArray(payload?.releases) ? payload.releases : []
+        const normalizedReleases = releases.flatMap((release) => {
+          const record = asRecord(release)
+          if (!record) return []
+          const version = typeof record.version === 'string' ? record.version.trim() : ''
+          const artifactUrl = typeof record.artifactUrl === 'string' ? record.artifactUrl.trim() : ''
+          const sha256 = typeof record.sha256 === 'string' ? record.sha256.trim().toLowerCase() : ''
+          if (!version || !artifactUrl || !/^[a-f0-9]{64}$/u.test(sha256)) {
+            return []
+          }
+          const runnerModes = Array.isArray(record.runnerModes)
+            ? record.runnerModes.filter((value): value is ConnectorRunnerMode => normalizeConnectorRunnerMode(value) !== undefined)
+            : []
+          const platforms = Array.isArray(record.platforms)
+            ? record.platforms.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map((value) => value.trim().toLowerCase())
+            : []
+          return [{
+            version,
+            artifactUrl,
+            sha256,
+            ...(typeof record.releaseNotes === 'string' && record.releaseNotes.trim().length > 0 ? { releaseNotes: record.releaseNotes.trim() } : {}),
+            ...(typeof record.releaseNotesUrl === 'string' && record.releaseNotesUrl.trim().length > 0 ? { releaseNotesUrl: record.releaseNotesUrl.trim() } : {}),
+            ...(typeof record.publishedAtIso === 'string' && record.publishedAtIso.trim().length > 0 ? { publishedAtIso: record.publishedAtIso.trim() } : {}),
+            ...(runnerModes.length > 0 ? { runnerModes } : {}),
+            ...(platforms.length > 0 ? { platforms } : {}),
+          } satisfies ConnectorReleaseRecord]
+        })
+
+        writeConnectorReleaseCatalog(normalizedReleases)
+        setJson(res, 200, {
+          data: {
+            releases: readConnectorReleaseCatalog(),
+          },
+        })
+        return
+      }
+
       if (req.method === 'GET' && url.pathname === '/codex-api/connectors') {
         const authenticatedUser = getRequestAuthenticatedUser(req)
         if (!authenticatedUser) {
@@ -3220,6 +3501,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           if (!enforceBootstrapExchangeRateLimit(req, res)) {
             return
           }
+          const telemetry = normalizeConnectorTelemetrySnapshot(await readJsonBody(req))
           const bootstrapLookup = await findConnectorByBootstrapToken(connectorId, readBearerToken(req))
           if (!bootstrapLookup) {
             setJson(res, 401, { error: 'Invalid bootstrap token' })
@@ -3245,7 +3527,7 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
 
           const issued = relayHub.issueAgentToken(currentConnector.relayAgentId)
           const nowIso = new Date().toISOString()
-          const nextConnector: CodexConnectorRecord = {
+          const nextConnector = applyConnectorTelemetrySnapshot({
             ...currentConnector,
             credentialHash: issued.tokenHash,
             credentialIssuedAtIso: nowIso,
@@ -3253,10 +3535,8 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             bootstrapTokenHash: undefined,
             bootstrapExpiresAtIso: undefined,
             updatedAtIso: nowIso,
-          }
-          const nextConnectors = [...state.connectors]
-          nextConnectors[index] = nextConnector
-          await writeConnectorRegistryState(scope, { connectors: nextConnectors })
+          }, telemetry, nowIso)
+          await persistConnectorLookupUpdate(bootstrapLookup, nextConnector)
           relayHub.upsertPersistedAgent({
             id: nextConnector.relayAgentId,
             name: nextConnector.name,
@@ -3377,6 +3657,107 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           return
         }
 
+        if (req.method === 'GET' && connectorResource.action === 'update-jobs') {
+          const userId = registryScope.userId
+          if (!userId) {
+            setJson(res, 403, { error: 'Connector update jobs require a signed-in user scope' })
+            return
+          }
+          const jobs = readConnectorUpdateJobs(userId)
+            .filter((job) => job.connectorId === currentConnector.id)
+            .map((job) => toPublicConnectorUpdateJob(job))
+          setJson(res, 200, {
+            data: {
+              jobs,
+            },
+          })
+          return
+        }
+
+        if (req.method === 'POST' && connectorResource.action === 'update-jobs') {
+          const userId = registryScope.userId
+          if (!userId) {
+            setJson(res, 403, { error: 'Connector update jobs require a signed-in user scope' })
+            return
+          }
+          const payload = asRecord(await readJsonBody(req))
+          const action = payload?.action === 'restart' ? 'restart' : 'update'
+          if (!isManagedConnectorRunnerModeForHub(currentConnector.runnerMode)) {
+            setJson(res, 409, { error: `Connector "${currentConnector.id}" uses an unsupported runner for hub-managed updates.` })
+            return
+          }
+          if (action === 'update' && currentConnector.updateCapable !== true) {
+            setJson(res, 409, { error: `Connector "${currentConnector.id}" does not advertise hub-managed updates.` })
+            return
+          }
+          if (action === 'restart' && currentConnector.restartCapable !== true) {
+            setJson(res, 409, { error: `Connector "${currentConnector.id}" does not advertise restart capability.` })
+            return
+          }
+
+          const jobs = readConnectorUpdateJobs(userId)
+          if (hasActiveConnectorUpdateJob(jobs, currentConnector.id)) {
+            setJson(res, 409, { error: `Connector "${currentConnector.id}" already has an active update job.` })
+            return
+          }
+
+          const targetVersion = typeof payload?.targetVersion === 'string' ? payload.targetVersion.trim() : ''
+          const release = action === 'update'
+            ? findCompatibleConnectorRelease(currentConnector, targetVersion || undefined)
+            : null
+          if (action === 'update' && !release) {
+            setJson(res, 409, { error: `No compatible connector release is available for "${currentConnector.id}".` })
+            return
+          }
+
+          const job = createConnectorUpdateJob({
+            connectorId: currentConnector.id,
+            serverId: currentConnector.serverId,
+            action: action as ConnectorUpdateJobAction,
+            ...(action === 'update' && release ? { targetVersion: release.version, artifact: release } : {}),
+            ...(currentConnector.connectorVersion ? { connectorVersion: currentConnector.connectorVersion } : {}),
+            ...(currentConnector.runnerMode ? { runnerMode: currentConnector.runnerMode } : {}),
+          })
+          writeConnectorUpdateJobs(userId, [job, ...jobs])
+          setJson(res, 201, {
+            data: {
+              job: toPublicConnectorUpdateJob(job),
+            },
+          })
+          return
+        }
+
+        if (req.method === 'POST' && connectorResource.action === 'restart') {
+          const userId = registryScope.userId
+          if (!userId) {
+            setJson(res, 403, { error: 'Connector restart requires a signed-in user scope' })
+            return
+          }
+          if (!isManagedConnectorRunnerModeForHub(currentConnector.runnerMode) || currentConnector.restartCapable !== true) {
+            setJson(res, 409, { error: `Connector "${currentConnector.id}" does not support hub-managed restart.` })
+            return
+          }
+          const jobs = readConnectorUpdateJobs(userId)
+          if (hasActiveConnectorUpdateJob(jobs, currentConnector.id)) {
+            setJson(res, 409, { error: `Connector "${currentConnector.id}" already has an active update job.` })
+            return
+          }
+          const job = createConnectorUpdateJob({
+            connectorId: currentConnector.id,
+            serverId: currentConnector.serverId,
+            action: 'restart',
+            ...(currentConnector.connectorVersion ? { connectorVersion: currentConnector.connectorVersion } : {}),
+            ...(currentConnector.runnerMode ? { runnerMode: currentConnector.runnerMode } : {}),
+          })
+          writeConnectorUpdateJobs(userId, [job, ...jobs])
+          setJson(res, 201, {
+            data: {
+              job: toPublicConnectorUpdateJob(job),
+            },
+          })
+          return
+        }
+
         setJson(res, 405, { error: 'Method not allowed' })
         return
       }
@@ -3410,7 +3791,15 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
           await syncRelayHubPersistedAgents(relayHub)
           const token = readBearerToken(req)
+          const telemetry = normalizeConnectorTelemetrySnapshot(await readJsonBody(req))
           const connected = relayHub.connectWithToken(token)
+          const connectorLookup = await findConnectorByCredentialToken(token)
+          if (connectorLookup) {
+            await persistConnectorLookupUpdate(
+              connectorLookup,
+              applyConnectorTelemetrySnapshot(connectorLookup.connector, telemetry),
+            )
+          }
           setJson(res, 200, { data: connected })
           return
         } catch (error) {
@@ -3419,6 +3808,106 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
           }
           throw error
         }
+      }
+
+      if (req.method === 'POST' && url.pathname === '/codex-api/connector-agent/jobs/poll') {
+        const token = readBearerToken(req)
+        const connectorLookup = await findConnectorByCredentialToken(token)
+        if (!connectorLookup) {
+          setJson(res, 401, { error: 'Invalid connector credential' })
+          return
+        }
+
+        const telemetry = normalizeConnectorTelemetrySnapshot(await readJsonBody(req))
+        const nextConnector = applyConnectorTelemetrySnapshot(connectorLookup.connector, telemetry)
+        if (nextConnector !== connectorLookup.connector) {
+          await persistConnectorLookupUpdate(connectorLookup, nextConnector)
+        }
+
+        const ownerUserId = connectorLookup.scope.userId
+        if (!ownerUserId) {
+          setJson(res, 200, { data: { job: null } })
+          return
+        }
+
+        const job = readConnectorUpdateJobs(ownerUserId).find((entry) => (
+          entry.connectorId === connectorLookup.connector.id
+          && entry.status === 'queued'
+        )) ?? null
+
+        setJson(res, 200, {
+          data: {
+            job: job ? toPublicConnectorUpdateJob(job) : null,
+          },
+        })
+        return
+      }
+
+      const connectorAgentStatusMatch = /^\/codex-api\/connector-agent\/jobs\/([^/]+)\/status$/u.exec(url.pathname)
+      if (req.method === 'POST' && connectorAgentStatusMatch) {
+        const token = readBearerToken(req)
+        const connectorLookup = await findConnectorByCredentialToken(token)
+        if (!connectorLookup) {
+          setJson(res, 401, { error: 'Invalid connector credential' })
+          return
+        }
+
+        const payload = asRecord(await readJsonBody(req))
+        const status = payload?.status
+        const normalizedStatus: ConnectorUpdateJobStatus | undefined = status === 'queued'
+          || status === 'downloading'
+          || status === 'verifying'
+          || status === 'applying'
+          || status === 'restarting'
+          || status === 'healthy'
+          || status === 'failed'
+          ? status
+          : undefined
+        if (!normalizedStatus) {
+          setJson(res, 400, { error: 'A valid connector job status is required.' })
+          return
+        }
+
+        const telemetry = normalizeConnectorTelemetrySnapshot(payload)
+        const nextConnector = applyConnectorTelemetrySnapshot(connectorLookup.connector, telemetry)
+        if (nextConnector !== connectorLookup.connector) {
+          await persistConnectorLookupUpdate(connectorLookup, nextConnector)
+        }
+
+        const ownerUserId = connectorLookup.scope.userId
+        if (!ownerUserId) {
+          setJson(res, 404, { error: 'Connector job store not found' })
+          return
+        }
+
+        const jobId = decodeURIComponent(connectorAgentStatusMatch[1] ?? '').trim()
+        const jobs = readConnectorUpdateJobs(ownerUserId)
+        const jobIndex = jobs.findIndex((job) => job.id === jobId && job.connectorId === connectorLookup.connector.id)
+        if (jobIndex === -1) {
+          setJson(res, 404, { error: `Connector job "${jobId}" not found` })
+          return
+        }
+
+        const currentJob = jobs[jobIndex]
+        const nowIso = new Date().toISOString()
+        const nextJob: ConnectorUpdateJobRecord = {
+          ...currentJob,
+          status: normalizedStatus,
+          ...(currentJob.startedAtIso || normalizedStatus === 'queued' ? {} : { startedAtIso: nowIso }),
+          ...(normalizedStatus === 'healthy' || normalizedStatus === 'failed' ? { completedAtIso: nowIso } : {}),
+          ...(typeof payload?.connectorVersion === 'string' && payload.connectorVersion.trim().length > 0 ? { connectorVersion: payload.connectorVersion.trim() } : {}),
+          ...(normalizeConnectorRunnerMode(payload?.runnerMode) ? { runnerMode: normalizeConnectorRunnerMode(payload?.runnerMode) } : {}),
+          ...(typeof payload?.errorMessage === 'string' && payload.errorMessage.trim().length > 0 ? { errorMessage: payload.errorMessage.trim() } : normalizedStatus === 'failed' ? { errorMessage: 'Connector update failed' } : {}),
+        }
+        const nextJobs = [...jobs]
+        nextJobs[jobIndex] = nextJob
+        writeConnectorUpdateJobs(ownerUserId, nextJobs)
+        setJson(res, 200, {
+          data: {
+            job: toPublicConnectorUpdateJob(nextJob),
+          },
+        })
+        return
       }
 
       if (req.method === 'GET' && url.pathname === '/codex-api/relay/agent/pull') {

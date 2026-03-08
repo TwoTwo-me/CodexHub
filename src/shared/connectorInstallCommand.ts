@@ -1,3 +1,5 @@
+import { createManagedConnectorRunnerCommand } from './connectorManagedRuntime.js'
+
 export const CONNECTOR_NPM_PACKAGE_SPEC = 'github:TwoTwo-me/codexUI#main'
 export const CONNECTOR_BIN_NAME = 'codexui-connector'
 const MASKED_TOKEN_PLACEHOLDER = '••••••••••••••••'
@@ -10,14 +12,13 @@ type ConnectorCommandInput = {
   relayE2eeKeyId?: string
   tokenFilePath?: string
   allowInsecureHttp?: boolean
+  packageSpec?: string
+  runnerMode?: 'script' | 'systemd-user' | 'pm2-user' | 'manual' | 'unknown'
+  runtimeStateFilePath?: string
 }
 
 function getTokenFilePath(connectorId: string, tokenFilePath?: string): string {
   return tokenFilePath?.trim() || `$HOME/.codexui-connector/${connectorId}.token`
-}
-
-function getRunnerScriptPath(connectorId: string): string {
-  return `$HOME/.config/codexui-connector/${connectorId}.sh`
 }
 
 function getPm2InstallRoot(): string {
@@ -32,12 +33,12 @@ function getSystemdUnitName(connectorId: string): string {
   return `codexui-connector-${connectorId}.service`
 }
 
-function createConnectorExecPrefix(): string[] {
+function createConnectorExecPrefix(packageSpec = CONNECTOR_NPM_PACKAGE_SPEC): string[] {
   return [
     'npm',
     'exec',
     '--yes',
-    `--package=${JSON.stringify(CONNECTOR_NPM_PACKAGE_SPEC)}`,
+    `--package=${JSON.stringify(packageSpec)}`,
     '--',
     CONNECTOR_BIN_NAME,
   ]
@@ -60,17 +61,11 @@ export function createConnectorConnectCommand(input: Omit<ConnectorCommandInput,
 export function createConnectorSystemdUserRegistrationCommand(
   input: Omit<ConnectorCommandInput, 'command' | 'bootstrapToken'>,
 ): string {
-  const runnerScriptPath = getRunnerScriptPath(input.connectorId)
   const unitName = getSystemdUnitName(input.connectorId)
-  const connectCommand = createConnectorConnectCommand(input)
+  const managedRunnerCommand = createManagedConnectorRunnerCommand(input.connectorId)
 
   return [
-    'mkdir -p "$HOME/.config/codexui-connector" "$HOME/.config/systemd/user"',
-    `cat > ${JSON.stringify(runnerScriptPath)} <<'EOF'`,
-    '#!/usr/bin/env bash',
-    `exec ${connectCommand}`,
-    'EOF',
-    `chmod 700 ${JSON.stringify(runnerScriptPath)}`,
+    'mkdir -p "$HOME/.config/systemd/user"',
     `cat > "$HOME/.config/systemd/user/${unitName}" <<'EOF'`,
     '[Unit]',
     `Description=CodexUI Connector (${input.connectorId})`,
@@ -79,7 +74,8 @@ export function createConnectorSystemdUserRegistrationCommand(
     '',
     '[Service]',
     'Type=simple',
-    `ExecStart=%h/.config/codexui-connector/${input.connectorId}.sh`,
+    'Environment=CODEXUI_CONNECTOR_RUNNER_MODE_OVERRIDE=systemd-user',
+    `ExecStart=${managedRunnerCommand}`,
     'Restart=always',
     'RestartSec=5',
     '',
@@ -94,27 +90,21 @@ export function createConnectorSystemdUserRegistrationCommand(
 export function createConnectorPm2RegistrationCommand(
   input: Omit<ConnectorCommandInput, 'command' | 'bootstrapToken'>,
 ): string {
-  const runnerScriptPath = getRunnerScriptPath(input.connectorId)
   const pm2Name = `codexui-connector-${input.connectorId}`
-  const connectCommand = createConnectorConnectCommand(input)
+  const managedRunnerCommand = createManagedConnectorRunnerCommand(input.connectorId)
 
   return [
     'mkdir -p "$HOME/.config/codexui-connector"',
     `if [ ! -x "${getPm2BinaryPath()}" ]; then npm install --prefix "${getPm2InstallRoot()}" pm2; fi`,
-    `cat > ${JSON.stringify(runnerScriptPath)} <<'EOF'`,
-    '#!/usr/bin/env bash',
-    `exec ${connectCommand}`,
-    'EOF',
-    `chmod 700 ${JSON.stringify(runnerScriptPath)}`,
     'export PM2_HOME="$HOME/.pm2"',
-    `"${getPm2BinaryPath()}" start ${JSON.stringify(runnerScriptPath)} --name ${JSON.stringify(pm2Name)}`,
+    `CODEXUI_CONNECTOR_RUNNER_MODE_OVERRIDE=pm2-user "${getPm2BinaryPath()}" start ${JSON.stringify(managedRunnerCommand)} --name ${JSON.stringify(pm2Name)}`,
     `"${getPm2BinaryPath()}" save`,
   ].join('\n')
 }
 
 export function createConnectorCommand(input: ConnectorCommandInput): string {
   const parts = [
-    ...createConnectorExecPrefix(),
+    ...createConnectorExecPrefix(input.packageSpec),
     input.command,
     `--hub ${JSON.stringify(input.hubAddress)}`,
     `--connector ${JSON.stringify(input.connectorId)}`,
@@ -134,6 +124,18 @@ export function createConnectorCommand(input: ConnectorCommandInput): string {
   if (input.relayE2eeKeyId) {
     parts.push(`--key-id ${JSON.stringify(input.relayE2eeKeyId)}`)
     parts.push('--passphrase "<relay-passphrase>"')
+  }
+
+  if (input.runnerMode) {
+    parts.push(`--runner-mode ${JSON.stringify(input.runnerMode)}`)
+  }
+
+  if (input.runtimeStateFilePath) {
+    parts.push(`--runtime-state-file ${JSON.stringify(input.runtimeStateFilePath)}`)
+  }
+
+  if (input.packageSpec) {
+    parts.push(`--package-spec ${JSON.stringify(input.packageSpec)}`)
   }
 
   if (input.allowInsecureHttp === true || input.hubAddress.startsWith('http://')) {

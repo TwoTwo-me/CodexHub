@@ -53,6 +53,7 @@ export type RelayConnectorOptions = {
   reconnectDelayMs?: number
   notificationFlushDelayMs?: number
   onLog?: (level: RelayConnectorLogLevel, message: string) => void
+  afterPoll?: () => Promise<void> | void
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -65,6 +66,17 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
   })
+}
+
+
+export class RelayConnectorControlSignal extends Error {
+  readonly code: 'restart'
+
+  constructor(code: 'restart') {
+    super(code)
+    this.name = 'RelayConnectorControlSignal'
+    this.code = code
+  }
 }
 
 function asRateLimitError(error: unknown): { message: string; retryAfterMs?: number } | null {
@@ -90,6 +102,7 @@ export class CodexRelayConnector {
   private readonly notificationFlushDelayMs: number
   private readonly connectorId: string
   private readonly onLog?: (level: RelayConnectorLogLevel, message: string) => void
+  private readonly afterPoll?: () => Promise<void> | void
   private readonly pendingMessages: Array<RelayResponseEnvelope | RelayEventEnvelope> = []
   private readonly unsubscribeNotificationListener: () => void
   private flushPromise: Promise<void> | null = null
@@ -114,6 +127,7 @@ export class CodexRelayConnector {
       : 250
     this.connectorId = options.connectorId?.trim() || 'connector'
     this.onLog = options.onLog
+    this.afterPoll = options.afterPoll
     this.unsubscribeNotificationListener = this.appServer.onNotification((notification) => {
       void this.handleLocalNotification(notification)
     })
@@ -175,7 +189,11 @@ export class CodexRelayConnector {
     while (!this.stopped) {
       try {
         await this.pollOnce()
+        await this.afterPoll?.()
       } catch (error) {
+        if (error instanceof RelayConnectorControlSignal) {
+          throw error
+        }
         const rateLimit = asRateLimitError(error)
         if (rateLimit) {
           const retryAfterMs = rateLimit.retryAfterMs ?? this.reconnectDelayMs
