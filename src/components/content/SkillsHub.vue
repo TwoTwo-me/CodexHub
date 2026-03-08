@@ -5,6 +5,15 @@
       <p class="skills-hub-subtitle">Browse and discover skills from the OpenClaw community</p>
     </div>
 
+    <div class="skills-hub-server">
+      <ServerPicker
+        :model-value="serverId"
+        :options="servers"
+        mode="compact"
+        @update:model-value="onSelectServer"
+      />
+    </div>
+
     <div class="skills-hub-toolbar">
       <div class="skills-hub-search-wrap">
         <IconTablerSearch class="skills-hub-search-icon" />
@@ -79,6 +88,7 @@ import {
 } from '../../api/codexGateway'
 import IconTablerSearch from '../icons/IconTablerSearch.vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
+import ServerPicker from './ServerPicker.vue'
 import SkillCard from './SkillCard.vue'
 import SkillDetailModal, { type HubSkill } from './SkillDetailModal.vue'
 
@@ -88,8 +98,10 @@ type SkillsHubPayload = { data: HubSkill[]; installed?: HubSkill[]; total: numbe
 
 const props = withDefaults(defineProps<{
   serverId?: string
+  servers?: Array<{ id: string; label: string; description?: string }>
 }>(), {
   serverId: '',
+  servers: () => [],
 })
 
 const searchRef = ref<HTMLInputElement | null>(null)
@@ -111,6 +123,7 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
 const emit = defineEmits<{
+  'select-server': [serverId: string]
   'skills-changed': []
 }>()
 
@@ -251,6 +264,10 @@ function openDetail(skill: HubSkill): void {
   isDetailOpen.value = true
 }
 
+function onSelectServer(serverId: string): void {
+  emit('select-server', serverId)
+}
+
 async function handleInstall(skill: HubSkill): Promise<void> {
   actionSkillKey.value = `${skill.owner}/${skill.name}`
   isInstallActionInFlight.value = true
@@ -295,7 +312,12 @@ async function handleUninstall(skill: HubSkill): Promise<void> {
 
 async function handleToggleEnabled(skill: HubSkill, enabled: boolean): Promise<void> {
   try {
-    const resp = await fetch('/codex-api/rpc', {
+    const search = new URLSearchParams()
+    if (props.serverId?.trim()) {
+      search.set('serverId', props.serverId.trim())
+    }
+    const target = search.size > 0 ? `/codex-api/rpc?${search.toString()}` : '/codex-api/rpc'
+    const resp = await fetch(target, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ method: 'skills/config/write', params: { path: skill.path, enabled } }),
@@ -329,6 +351,10 @@ watch(() => props.serverId, () => {
 
 .skills-hub-header {
   @apply flex flex-col gap-1;
+}
+
+.skills-hub-server {
+  @apply flex items-center justify-between;
 }
 
 .skills-hub-title {

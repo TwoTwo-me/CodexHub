@@ -774,6 +774,7 @@ export function useDesktopState() {
   const isInterruptingTurn = ref(false)
   const isRollingBack = ref(false)
   const error = ref('')
+  const hookCompatibilityError = ref('')
   const isPolling = ref(false)
   const hasLoadedThreads = ref(false)
   const isAutoRefreshEnabled = ref(loadAutoRefreshEnabled())
@@ -930,6 +931,7 @@ export function useDesktopState() {
     loadedVersionByThreadId.value = {}
     resumedThreadById.value = {}
     pendingServerRequestsByThreadId.value = {}
+    hookCompatibilityError.value = ''
     eventUnreadByThreadId.value = {}
     inProgressById.value = {}
     pendingTurnStartsById.clear()
@@ -2709,9 +2711,13 @@ export function useDesktopState() {
       }
 
       pendingServerRequestsByThreadId.value = Object.keys(nextByThreadId).length > 0 ? nextByThreadId : {}
+      hookCompatibilityError.value = ''
       applyThreadFlags()
-    } catch {
-      // Keep UI usable when pending request endpoint is temporarily unavailable.
+    } catch (unknownError) {
+      const message = unknownError instanceof Error ? unknownError.message : 'Failed to load hook approvals'
+      if (/older codexui-connector build|hook approval/i.test(message)) {
+        hookCompatibilityError.value = message
+      }
     }
   }
 
@@ -2842,6 +2848,7 @@ export function useDesktopState() {
     hookCountByThreadId,
     hasPendingHooks,
     pendingHookCount,
+    hookCompatibilityError,
     selectedLiveOverlay,
     selectedThreadId,
     availableModelIds,

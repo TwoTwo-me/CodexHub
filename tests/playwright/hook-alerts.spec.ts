@@ -80,6 +80,11 @@ test.beforeEach(async ({ page }) => {
               itemId: 'item-relay',
               command: 'hostname',
               reason: 'Need to inspect the connector hostname',
+              availableDecisions: [
+                'accept',
+                { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['hostname'] } },
+                'cancel',
+              ],
             },
             receivedAtIso: '2026-03-08T12:00:00.000Z',
           },
@@ -205,7 +210,8 @@ test('home route shows a visible hook alert and thread view shows explicit appro
   await expect(page.getByText('Shell command approval')).toBeVisible()
   await expect(page.getByText('hostname', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Approve', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Reject', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Approve & remember hostname', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
 
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/hook-alerts-thread-approval-desktop.png`,

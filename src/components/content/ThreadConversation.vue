@@ -24,18 +24,17 @@
               <p v-if="readRequestReason(request)" class="request-reason">{{ readRequestReason(request) }}</p>
               <pre v-if="readRequestCommand(request)" class="request-command">{{ readRequestCommand(request) }}</pre>
 
-              <section v-if="request.method === 'item/commandExecution/requestApproval'" class="request-actions">
-                <button type="button" class="request-button request-button-primary" @click="onRespondApproval(request.id, 'accept')">Approve</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'acceptForSession')">Approve for session</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'decline')">Reject</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'cancel')">Cancel</button>
-              </section>
-
-              <section v-else-if="request.method === 'item/fileChange/requestApproval'" class="request-actions">
-                <button type="button" class="request-button request-button-primary" @click="onRespondApproval(request.id, 'accept')">Approve</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'acceptForSession')">Approve for session</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'decline')">Reject</button>
-                <button type="button" class="request-button" @click="onRespondApproval(request.id, 'cancel')">Cancel</button>
+              <section v-if="isApprovalRequest(request)" class="request-actions">
+                <button
+                  v-for="action in readApprovalActions(request)"
+                  :key="`${request.id}:${action.key}`"
+                  type="button"
+                  class="request-button"
+                  :class="{ 'request-button-primary': action.primary }"
+                  @click="onRespondApproval(request, action.payload)"
+                >
+                  {{ action.label }}
+                </button>
               </section>
 
               <section v-else-if="request.method === 'item/tool/requestUserInput'" class="request-user-input">
@@ -571,6 +570,78 @@ function readRequestCommand(request: UiServerRequest): string {
   return typeof command === 'string' ? command.trim() : ''
 }
 
+type ApprovalAction = {
+  key: string
+  label: string
+  payload: Record<string, unknown>
+  primary: boolean
+}
+
+function isApprovalRequest(request: UiServerRequest): boolean {
+  return request.method === 'item/commandExecution/requestApproval'
+    || request.method === 'item/fileChange/requestApproval'
+}
+
+function buildApprovalActionLabel(decision: string, payload: Record<string, unknown>): string {
+  switch (decision) {
+    case 'accept':
+      return 'Approve'
+    case 'acceptForSession':
+      return 'Approve for session'
+    case 'acceptWithExecpolicyAmendment': {
+      const amendments = Array.isArray(payload.execpolicy_amendment)
+        ? payload.execpolicy_amendment.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        : []
+      if (amendments.length === 1) {
+        return `Approve & remember ${amendments[0]}`
+      }
+      return 'Approve & remember'
+    }
+    case 'decline':
+      return 'Reject'
+    case 'cancel':
+      return 'Cancel'
+    default:
+      return decision
+  }
+}
+
+function readApprovalActions(request: UiServerRequest): ApprovalAction[] {
+  const params = asRecord(request.params)
+  const rawDecisions = Array.isArray(params?.availableDecisions) ? params.availableDecisions : []
+  const fallbackDecisions: unknown[] = request.method === 'item/commandExecution/requestApproval'
+    ? ['accept', 'acceptForSession', 'decline', 'cancel']
+    : ['accept', 'acceptForSession', 'decline', 'cancel']
+  const source = rawDecisions.length > 0 ? rawDecisions : fallbackDecisions
+
+  return source.flatMap((entry, index): ApprovalAction[] => {
+    if (typeof entry === 'string' && entry.trim().length > 0) {
+      const decision = entry.trim()
+      return [{
+        key: decision,
+        label: buildApprovalActionLabel(decision, {}),
+        payload: { decision },
+        primary: index === 0 || decision === 'accept',
+      }]
+    }
+
+    const record = asRecord(entry)
+    if (!record) return []
+    const [decision, rawPayload] = Object.entries(record)[0] ?? []
+    if (typeof decision !== 'string' || decision.trim().length === 0) return []
+    const payload = asRecord(rawPayload) ?? {}
+    return [{
+      key: `${decision}:${index}`,
+      label: buildApprovalActionLabel(decision, payload),
+      payload: {
+        decision,
+        ...payload,
+      },
+      primary: index === 0 || decision === 'accept',
+    }]
+  })
+}
+
 function requestHeadline(request: UiServerRequest): string {
   switch (request.method) {
     case 'item/commandExecution/requestApproval':
@@ -652,10 +723,10 @@ function onQuestionOtherAnswerInput(requestId: number, questionId: string, event
   }
 }
 
-function onRespondApproval(requestId: number, decision: 'accept' | 'acceptForSession' | 'decline' | 'cancel'): void {
+function onRespondApproval(request: UiServerRequest, payload: Record<string, unknown>): void {
   emit('respondServerRequest', {
-    id: requestId,
-    result: { decision },
+    id: request.id,
+    result: payload,
   })
 }
 

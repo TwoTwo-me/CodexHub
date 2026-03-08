@@ -187,8 +187,16 @@
               Review hooks
             </button>
           </div>
+          <p v-if="hookCompatibilityError" class="content-error">
+            {{ hookCompatibilityError }}
+          </p>
           <template v-if="isSkillsRoute">
-            <SkillsHub :server-id="selectedServerId" @skills-changed="onSkillsChanged" />
+            <SkillsHub
+              :server-id="selectedServerId"
+              :servers="availableServers"
+              @select-server="onSelectServer"
+              @skills-changed="onSkillsChanged"
+            />
           </template>
           <template v-else-if="isAdminRoute">
             <AdminPanel v-if="isAdminUser" />
@@ -308,6 +316,7 @@ const {
   hookCountByThreadId,
   hasPendingHooks,
   pendingHookCount,
+  hookCompatibilityError,
   selectedLiveOverlay,
   selectedThreadId,
   availableModelIds,

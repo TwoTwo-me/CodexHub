@@ -168,8 +168,9 @@ test('skills hub uses the active server scope and refreshes when switching conne
   await page.getByRole('button', { name: 'Skills Hub' }).click()
   await page.waitForTimeout(800)
   await expect(page.locator('.skill-card-name', { hasText: 'Alpha Toolkit' })).toBeVisible()
+  await expect(page.locator('.skills-hub-server .server-picker-select')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Server B' }).click()
+  await page.locator('.skills-hub-server .server-picker-select').selectOption('server-b')
   await page.waitForTimeout(800)
   await expect(page.locator('.skill-card-name', { hasText: 'Beta Toolkit' })).toBeVisible()
   await expect(page.locator('.skill-card-name', { hasText: 'Alpha Toolkit' })).toHaveCount(0)

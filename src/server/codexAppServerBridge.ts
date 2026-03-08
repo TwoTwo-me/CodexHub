@@ -2599,6 +2599,50 @@ function mapRelayHubErrorToBridgeError(error: RelayHubError): BridgeHttpError {
   return new BridgeHttpError(error.statusCode, error.message)
 }
 
+function readConnectorBridgeFeatureLabel(method: string): string {
+  switch (method) {
+    case SERVER_FS_LIST_METHOD:
+      return 'server-scoped folder browsing'
+    case SERVER_PROJECT_ROOT_SUGGESTION_METHOD:
+      return 'server-scoped project suggestions'
+    case SERVER_COMPOSER_FILE_SEARCH_METHOD:
+      return 'server-scoped file search'
+    case SERVER_REQUESTS_PENDING_METHOD:
+      return 'hook approval requests'
+    case SERVER_REQUESTS_RESPOND_METHOD:
+      return 'hook approval replies'
+    case SERVER_SKILLS_INSTALL_METHOD:
+      return 'Skills Hub installs'
+    case SERVER_SKILLS_UNINSTALL_METHOD:
+      return 'Skills Hub uninstalls'
+    default:
+      return `connector bridge method "${method}"`
+  }
+}
+
+function isUnsupportedConnectorBridgeMethod(error: unknown, method: string): boolean {
+  const message = getErrorMessage(error, '')
+  if (!message) return false
+  return message.includes(`unknown variant \`${method}\``)
+    || message.includes(`unknown method \`${method}\``)
+    || message.includes(`Unsupported server fs bridge method "${method}"`)
+}
+
+function mapUnsupportedConnectorBridgeMethodError(
+  error: unknown,
+  method: string,
+  serverId: string,
+): BridgeHttpError | null {
+  if (!isUnsupportedConnectorBridgeMethod(error, method)) {
+    return null
+  }
+  const feature = readConnectorBridgeFeatureLabel(method)
+  return new BridgeHttpError(
+    409,
+    `Connector "${serverId}" is running an older codexui-connector build and does not support ${feature}. Restart the connector with the latest helper script and try again.`,
+  )
+}
+
 async function dispatchServerScopedBridgeMethod(
   resolved: ResolvedServerRuntime,
   method: string,
@@ -2622,6 +2666,10 @@ async function dispatchServerScopedBridgeMethod(
         relayConfig.requestTimeoutMs,
       )
     } catch (error) {
+      const unsupportedError = mapUnsupportedConnectorBridgeMethodError(error, method, resolved.server.id)
+      if (unsupportedError) {
+        throw unsupportedError
+      }
       if (error instanceof RelayHubError) {
         throw mapRelayHubErrorToBridgeError(error)
       }
@@ -3710,6 +3758,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             setJson(res, 200, { ok: true })
             return
           } catch (error) {
+            const unsupportedError = mapUnsupportedConnectorBridgeMethodError(
+              error,
+              SERVER_REQUESTS_RESPOND_METHOD,
+              resolved.server.id,
+            )
+            if (unsupportedError) {
+              throw unsupportedError
+            }
             if (error instanceof RelayHubError) {
               throw mapRelayHubErrorToBridgeError(error)
             }
@@ -3744,6 +3800,14 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
             setJson(res, 200, { data })
             return
           } catch (error) {
+            const unsupportedError = mapUnsupportedConnectorBridgeMethodError(
+              error,
+              SERVER_REQUESTS_PENDING_METHOD,
+              resolved.server.id,
+            )
+            if (unsupportedError) {
+              throw unsupportedError
+            }
             if (error instanceof RelayHubError) {
               throw mapRelayHubErrorToBridgeError(error)
             }

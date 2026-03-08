@@ -523,6 +523,74 @@ test('relay-backed skill install and uninstall run on the selected connector hos
   }
 })
 
+test('relay-backed skill install returns a connector upgrade error when the remote connector is outdated', async () => {
+  const server = await startServer({ password: 'relay-skills-compat-bootstrap-1' })
+  const connectorModule = await loadConnectorModule()
+
+  try {
+    const cookie = await loginAndCompleteBootstrap(
+      server.baseUrl,
+      'relay-admin',
+      'relay-skills-compat-bootstrap-1',
+      'relay-skills-compat-admin',
+      'relay-skills-compat-bootstrap-2',
+    )
+    const credentialToken = await createConnectorCredential(server.baseUrl, cookie, 'remote-skills-compat')
+
+    const transport = new connectorModule.HttpRelayHubTransport(server.baseUrl, { allowInsecureHttp: true })
+    const connector = new connectorModule.CodexRelayConnector({
+      token: credentialToken,
+      transport,
+      connectorId: 'remote-skills-compat',
+      pollWaitMs: 50,
+      notificationFlushDelayMs: 0,
+      appServer: {
+        async rpc(method) {
+          if (method === 'codexui/skills/install') {
+            throw new Error('Invalid request: unknown variant `codexui/skills/install`')
+          }
+          if (method === 'skills/list') {
+            return { data: [] }
+          }
+          throw new Error(`Unexpected relay method: ${method}`)
+        },
+        onNotification() {
+          return () => {}
+        },
+      },
+    })
+    const connectorLoop = startConnectorLoop(connector)
+
+    try {
+      const installResponse = await postJson(
+        `${server.baseUrl}/codex-api/skills-hub/install?serverId=remote-skills-compat`,
+        {
+          owner: 'openclaw',
+          name: 'docker-toolkit',
+        },
+        {
+          Cookie: cookie,
+          Origin: server.baseUrl,
+        },
+      )
+      const installPayload = await installResponse.json()
+      assert.equal(installResponse.status, 409, JSON.stringify(installPayload))
+      assert.match(
+        installPayload.error,
+        /older codexui-connector build.*Skills Hub installs.*latest helper script/i,
+      )
+    } finally {
+      connectorLoop.stop()
+      await Promise.race([
+        connectorLoop.loop,
+        new Promise((resolvePromise) => setTimeout(resolvePromise, 200)),
+      ])
+    }
+  } finally {
+    await server.stop()
+  }
+})
+
 test('relay-backed pending server requests can be hydrated and replied to', async () => {
   const server = await startServer({ password: 'relay-hooks-bootstrap-1' })
   const connectorModule = await loadConnectorModule()
@@ -626,6 +694,69 @@ test('relay-backed pending server requests can be hydrated and replied to', asyn
       assert.deepEqual(refreshedPayload.data, [])
       assert.ok(rpcCalls.some((call) => call.method === 'codexui/server-requests/pending'))
       assert.ok(rpcCalls.some((call) => call.method === 'codexui/server-requests/respond'))
+    } finally {
+      connectorLoop.stop()
+      await Promise.race([
+        connectorLoop.loop,
+        new Promise((resolvePromise) => setTimeout(resolvePromise, 200)),
+      ])
+    }
+  } finally {
+    await server.stop()
+  }
+})
+
+test('relay-backed pending server request hydration returns a connector upgrade error when unsupported', async () => {
+  const server = await startServer({ password: 'relay-hooks-compat-bootstrap-1' })
+  const connectorModule = await loadConnectorModule()
+
+  try {
+    const cookie = await loginAndCompleteBootstrap(
+      server.baseUrl,
+      'relay-admin',
+      'relay-hooks-compat-bootstrap-1',
+      'relay-hooks-compat-admin',
+      'relay-hooks-compat-bootstrap-2',
+    )
+    const credentialToken = await createConnectorCredential(server.baseUrl, cookie, 'remote-hooks-compat')
+
+    const transport = new connectorModule.HttpRelayHubTransport(server.baseUrl, { allowInsecureHttp: true })
+    const connector = new connectorModule.CodexRelayConnector({
+      token: credentialToken,
+      transport,
+      connectorId: 'remote-hooks-compat',
+      pollWaitMs: 50,
+      notificationFlushDelayMs: 0,
+      appServer: {
+        async rpc(method) {
+          if (method === 'codexui/server-requests/pending') {
+            throw new Error('Invalid request: unknown variant `codexui/server-requests/pending`')
+          }
+          if (method === 'thread/list') {
+            return { data: [] }
+          }
+          throw new Error(`Unexpected relay method: ${method}`)
+        },
+        onNotification() {
+          return () => {}
+        },
+      },
+    })
+    const connectorLoop = startConnectorLoop(connector)
+
+    try {
+      const pendingResponse = await fetch(`${server.baseUrl}/codex-api/server-requests/pending?serverId=remote-hooks-compat`, {
+        headers: {
+          Accept: 'application/json',
+          Cookie: cookie,
+        },
+      })
+      const pendingPayload = await pendingResponse.json()
+      assert.equal(pendingResponse.status, 409, JSON.stringify(pendingPayload))
+      assert.match(
+        pendingPayload.error,
+        /older codexui-connector build.*hook approval requests.*latest helper script/i,
+      )
     } finally {
       connectorLoop.stop()
       await Promise.race([
