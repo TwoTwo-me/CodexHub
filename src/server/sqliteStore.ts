@@ -139,6 +139,56 @@ function ensurePushSubscriptionsTable(database: SqliteDatabase): void {
   }
 }
 
+
+function ensureAuthSessionsTable(database: SqliteDatabase): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      created_at_iso TEXT NOT NULL,
+      expires_at_iso TEXT NOT NULL,
+      revoked_at_iso TEXT,
+      last_seen_at_iso TEXT
+    );
+    CREATE INDEX IF NOT EXISTS auth_sessions_user_id_idx ON auth_sessions(user_id);
+    CREATE INDEX IF NOT EXISTS auth_sessions_expires_at_idx ON auth_sessions(expires_at_iso);
+  `)
+}
+
+function ensureAuthRateLimitsTable(database: SqliteDatabase): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS auth_rate_limits (
+      scope TEXT NOT NULL,
+      key TEXT NOT NULL,
+      attempts INTEGER NOT NULL,
+      window_started_at_ms INTEGER NOT NULL,
+      blocked_until_ms INTEGER NOT NULL,
+      updated_at_iso TEXT NOT NULL,
+      PRIMARY KEY (scope, key)
+    );
+    CREATE INDEX IF NOT EXISTS auth_rate_limits_scope_updated_idx ON auth_rate_limits(scope, updated_at_iso);
+  `)
+}
+
+function ensureAuthRecoveryAuditTable(database: SqliteDatabase): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS auth_recovery_audit (
+      id TEXT PRIMARY KEY,
+      actor_user_id TEXT,
+      actor_username TEXT,
+      actor_type TEXT NOT NULL,
+      target_user_id TEXT,
+      target_username TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      created_at_iso TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS auth_recovery_audit_target_user_idx ON auth_recovery_audit(target_user_id, created_at_iso);
+    CREATE INDEX IF NOT EXISTS auth_recovery_audit_actor_user_idx ON auth_recovery_audit(actor_user_id, created_at_iso);
+  `)
+}
+
 function initializeDatabase(database: SqliteDatabase): void {
   database.pragma('journal_mode = WAL')
   database.pragma('foreign_keys = ON')
@@ -146,6 +196,9 @@ function initializeDatabase(database: SqliteDatabase): void {
   ensureUsersTable(database)
   ensureStateEntriesTable(database)
   ensurePushSubscriptionsTable(database)
+  ensureAuthSessionsTable(database)
+  ensureAuthRateLimitsTable(database)
+  ensureAuthRecoveryAuditTable(database)
 }
 
 export function getHubDatabase(): SqliteDatabase {

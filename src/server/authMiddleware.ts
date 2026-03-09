@@ -13,6 +13,7 @@ import {
   type UserRole,
   upsertBootstrapAdmin,
 } from './userStore.js'
+import { createSqliteAuthStateStore, type AuthStateStore } from './authStateStore.js'
 import { setRequestAuthenticatedUser } from './requestAuthContext.js'
 
 const TOKEN_COOKIE = 'codex_web_local_token'
@@ -27,16 +28,15 @@ const LOGIN_RATE_LIMIT_MAX_PER_USERNAME = 10
 const SIGNUP_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000
 const SIGNUP_RATE_LIMIT_BLOCK_MS = 15 * 60 * 1000
 const SIGNUP_RATE_LIMIT_MAX_PER_IP = 20
+const LOGIN_RATE_LIMIT_IP_SCOPE = 'login:ip'
+const LOGIN_RATE_LIMIT_USERNAME_SCOPE = 'login:username'
+const SIGNUP_RATE_LIMIT_IP_SCOPE = 'signup:ip'
 
 type AuthMiddlewareOptions = {
   bootstrapAdminPassword?: string
   bootstrapAdminPasswordHash?: string
   bootstrapAdminUsername?: string
-}
-
-type SessionRecord = {
-  userId: string
-  expiresAtMs: number
+  authStateStore?: AuthStateStore
 }
 
 type RateLimitRecord = {
@@ -81,6 +81,38 @@ function getRemoteAddress(req: Request): string {
     return remote.trim()
   }
   return 'unknown'
+}
+
+function getSingleHeaderValue(header: string | string[] | undefined): string {
+  if (typeof header === 'string') return header.trim()
+  if (Array.isArray(header)) {
+    for (const value of header) {
+      if (typeof value === 'string' && value.trim().length > 0) {
+        return value.trim()
+      }
+    }
+  }
+  return ''
+}
+
+function getTrustedClientAddress(req: Request): string {
+  const remoteAddress = getRemoteAddress(req)
+  if (!isLocalhostRequest(req)) {
+    return remoteAddress
+  }
+
+  const forwardedFor = getSingleHeaderValue(req.headers['x-forwarded-for'])
+  if (forwardedFor.length > 0) {
+    const firstForwarded = forwardedFor.split(',')[0]?.trim()
+    if (firstForwarded) return firstForwarded
+  }
+
+  const realIp = getSingleHeaderValue(req.headers['x-real-ip'])
+  if (realIp.length > 0) {
+    return realIp
+  }
+
+  return remoteAddress
 }
 
 function normalizeRateLimitKey(value: string): string {
@@ -458,11 +490,7 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
     (options.bootstrapAdminUsername && options.bootstrapAdminUsername.trim().length > 0
       ? options.bootstrapAdminUsername.trim()
       : DEFAULT_BOOTSTRAP_ADMIN_USERNAME)
-
-  const sessionStore = new Map<string, SessionRecord>()
-  const loginRateLimitByIp = new Map<string, RateLimitRecord>()
-  const loginRateLimitByUsername = new Map<string, RateLimitRecord>()
-  const signupRateLimitByIp = new Map<string, RateLimitRecord>()
+  const authStateStore = options.authStateStore ?? createSqliteAuthStateStore()
   const bootstrapCredential: BootstrapAdminCredential | null = bootstrapAdminPasswordHash
     ? { passwordHash: bootstrapAdminPasswordHash }
     : null
@@ -475,17 +503,12 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
     const token = cookies[TOKEN_COOKIE]
     if (!token) return null
 
-    const session = sessionStore.get(token)
+    const session = authStateStore.resolveSession(token)
     if (!session) return null
-
-    if (Date.now() > session.expiresAtMs) {
-      sessionStore.delete(token)
-      return null
-    }
 
     const user = await findUserById(session.userId)
     if (!user) {
-      sessionStore.delete(token)
+      authStateStore.revokeSession(token)
       return null
     }
 
@@ -493,19 +516,15 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
   }
 
   function createSession(userId: string): string {
-    const token = randomBytes(32).toString('hex')
-    const nowMs = Date.now()
-    sessionStore.set(token, {
-      userId,
-      expiresAtMs: nowMs + SESSION_MAX_AGE_SECONDS * 1000,
+    return authStateStore.createSession(userId, {
+      expiresAtMs: Date.now() + SESSION_MAX_AGE_SECONDS * 1000,
     })
-    return token
   }
 
   function clearSession(req: Request): void {
     const token = parseCookies(req.headers.cookie)[TOKEN_COOKIE]
     if (!token) return
-    sessionStore.delete(token)
+    authStateStore.revokeSession(token)
   }
 
   async function handleSignup(
@@ -513,9 +532,9 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
     res: Response,
     currentUser: UserProfile | null,
   ): Promise<void> {
-    const remoteAddressKey = normalizeRateLimitKey(getRemoteAddress(req))
-    const signupLimitDecision = evaluateRateLimit(
-      signupRateLimitByIp,
+    const remoteAddressKey = normalizeRateLimitKey(getTrustedClientAddress(req))
+    const signupLimitDecision = authStateStore.evaluateRateLimit(
+      SIGNUP_RATE_LIMIT_IP_SCOPE,
       remoteAddressKey,
       {
         maxAttempts: SIGNUP_RATE_LIMIT_MAX_PER_IP,
@@ -527,7 +546,11 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
       writeRateLimitedResponse(res, signupLimitDecision.retryAfterSeconds, 'Too many signup attempts. Try again later.')
       return
     }
-    incrementRateLimitAttempt(signupRateLimitByIp, remoteAddressKey, { windowMs: SIGNUP_RATE_LIMIT_WINDOW_MS })
+    authStateStore.incrementRateLimitAttempt(
+      SIGNUP_RATE_LIMIT_IP_SCOPE,
+      remoteAddressKey,
+      { windowMs: SIGNUP_RATE_LIMIT_WINDOW_MS },
+    )
 
     const body = await readJsonBody(req)
     if (!body) {
@@ -571,9 +594,9 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
   }
 
   async function handleRegister(req: Request, res: Response): Promise<void> {
-    const remoteAddressKey = normalizeRateLimitKey(getRemoteAddress(req))
-    const signupLimitDecision = evaluateRateLimit(
-      signupRateLimitByIp,
+    const remoteAddressKey = normalizeRateLimitKey(getTrustedClientAddress(req))
+    const signupLimitDecision = authStateStore.evaluateRateLimit(
+      SIGNUP_RATE_LIMIT_IP_SCOPE,
       remoteAddressKey,
       {
         maxAttempts: SIGNUP_RATE_LIMIT_MAX_PER_IP,
@@ -585,7 +608,11 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
       writeRateLimitedResponse(res, signupLimitDecision.retryAfterSeconds, 'Too many signup attempts. Try again later.')
       return
     }
-    incrementRateLimitAttempt(signupRateLimitByIp, remoteAddressKey, { windowMs: SIGNUP_RATE_LIMIT_WINDOW_MS })
+    authStateStore.incrementRateLimitAttempt(
+      SIGNUP_RATE_LIMIT_IP_SCOPE,
+      remoteAddressKey,
+      { windowMs: SIGNUP_RATE_LIMIT_WINDOW_MS },
+    )
 
     const body = await readJsonBody(req)
     if (!body) {
@@ -617,9 +644,9 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
       return
     }
 
-    const remoteAddressKey = normalizeRateLimitKey(getRemoteAddress(req))
+    const remoteAddressKey = normalizeRateLimitKey(getTrustedClientAddress(req))
     const usernameKey = normalizeRateLimitKey(username || bootstrapAdminUsername)
-    const ipLimitDecision = evaluateRateLimit(loginRateLimitByIp, remoteAddressKey, {
+    const ipLimitDecision = authStateStore.evaluateRateLimit(LOGIN_RATE_LIMIT_IP_SCOPE, remoteAddressKey, {
       maxAttempts: LOGIN_RATE_LIMIT_MAX_PER_IP,
       windowMs: LOGIN_RATE_LIMIT_WINDOW_MS,
       blockMs: LOGIN_RATE_LIMIT_BLOCK_MS,
@@ -629,7 +656,7 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
       return
     }
 
-    const usernameLimitDecision = evaluateRateLimit(loginRateLimitByUsername, usernameKey, {
+    const usernameLimitDecision = authStateStore.evaluateRateLimit(LOGIN_RATE_LIMIT_USERNAME_SCOPE, usernameKey, {
       maxAttempts: LOGIN_RATE_LIMIT_MAX_PER_USERNAME,
       windowMs: LOGIN_RATE_LIMIT_WINDOW_MS,
       blockMs: LOGIN_RATE_LIMIT_BLOCK_MS,
@@ -665,14 +692,22 @@ export function createAuthMiddleware(passwordOrOptions: string | AuthMiddlewareO
     }
 
     if (!signedInUser && !pendingApprovalUser) {
-      incrementRateLimitAttempt(loginRateLimitByIp, remoteAddressKey, { windowMs: LOGIN_RATE_LIMIT_WINDOW_MS })
-      incrementRateLimitAttempt(loginRateLimitByUsername, usernameKey, { windowMs: LOGIN_RATE_LIMIT_WINDOW_MS })
+      authStateStore.incrementRateLimitAttempt(
+        LOGIN_RATE_LIMIT_IP_SCOPE,
+        remoteAddressKey,
+        { windowMs: LOGIN_RATE_LIMIT_WINDOW_MS },
+      )
+      authStateStore.incrementRateLimitAttempt(
+        LOGIN_RATE_LIMIT_USERNAME_SCOPE,
+        usernameKey,
+        { windowMs: LOGIN_RATE_LIMIT_WINDOW_MS },
+      )
       res.status(401).json({ error: 'Invalid credentials' })
       return
     }
 
-    clearRateLimit(loginRateLimitByIp, remoteAddressKey)
-    clearRateLimit(loginRateLimitByUsername, usernameKey)
+    authStateStore.clearRateLimit(LOGIN_RATE_LIMIT_IP_SCOPE, remoteAddressKey)
+    authStateStore.clearRateLimit(LOGIN_RATE_LIMIT_USERNAME_SCOPE, usernameKey)
 
     if (!signedInUser && pendingApprovalUser) {
       res.status(403).json({ error: 'Your account is waiting for admin approval.', user: pendingApprovalUser })

@@ -3,6 +3,7 @@ import { dirname, extname, isAbsolute, join } from 'node:path'
 import express, { type Express } from 'express'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
 import { createAuthMiddleware } from './authMiddleware.js'
+import { createSqliteAuthStateStore } from './authStateStore.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const distDir = join(__dirname, '..', 'dist')
@@ -44,13 +45,15 @@ function normalizeLocalImagePath(rawPath: string): string {
 
 export function createServer(options: ServerOptions = {}): ServerInstance {
   const app = express()
-  const bridge = createCodexBridgeMiddleware()
+  const authStateStore = createSqliteAuthStateStore()
+  const bridge = createCodexBridgeMiddleware({ authStateStore })
 
   // 1. Auth middleware
   app.use(createAuthMiddleware({
     bootstrapAdminPassword: options.password,
     bootstrapAdminPasswordHash: options.passwordHash,
     bootstrapAdminUsername: options.bootstrapAdminUsername,
+    authStateStore,
   }))
 
   // 2. Bridge middleware for /codex-api/*

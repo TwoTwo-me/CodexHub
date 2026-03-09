@@ -192,9 +192,21 @@ That persists:
 - connector registry
 - server registry
 - connector stats snapshots
-- session/bootstrap state
+- bootstrap/admin account state
+- authenticated browser sessions (when the same `CODEX_HOME` / `hub.sqlite` volume is reused)
+- login/signup rate-limit state
 - optional local Codex state for Hub-local registrations
 - workspace content exposed to local-on-Hub runtimes
+
+### Session recovery after restart/redeploy
+
+With the same persisted `${CODEXUI_CODEX_HOME_DIR}` volume:
+
+- browser login sessions survive normal Hub restart/redeploy
+- bootstrap/setup-required gating is still derived from the user record in SQLite
+- sessions are only invalidated when logout, credential recovery/reset, explicit revoke-all, or a compatibility/security event requires it
+
+If the Hub starts against a different or empty `CODEX_HOME`, previously issued browser sessions are not expected to recover.
 
 ## Remote-only deployment
 
