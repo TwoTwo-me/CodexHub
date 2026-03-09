@@ -4,6 +4,7 @@
       <div>
         <h2 class="admin-panel-title">User Management</h2>
         <p class="admin-panel-subtitle">Review access requests, approve pending users, and manage Hub membership.</p>
+        <p class="admin-panel-note">Last-admin recovery stays local-only. Use the Hub host CLI if you lose access to the final admin account.</p>
       </div>
       <button type="button" class="admin-panel-refresh" :disabled="isLoading" @click="void refreshUsers()">
         {{ isLoading ? 'Refreshing…' : 'Refresh' }}
@@ -26,30 +27,79 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="user in users" :key="user.id">
-            <td>{{ user.username }}</td>
-            <td class="uppercase">{{ user.role }}</td>
-            <td>
-              <span class="approval-badge" :class="user.approvalStatus === 'approved' ? 'is-approved' : 'is-pending'">
-                {{ user.approvalStatus === 'approved' ? 'Approved' : 'Pending approval' }}
-              </span>
-            </td>
-            <td>{{ formatDate(user.createdAtIso) }}</td>
-            <td>{{ formatDate(user.lastLoginAtIso) }}</td>
-            <td>
-              <button
-                v-if="user.approvalStatus === 'pending'"
-                type="button"
-                class="approve-button"
-                :disabled="pendingApprovalUserId === user.id"
-                :aria-label="`Approve ${user.username}`"
-                @click="void approvePendingUser(user)"
-              >
-                {{ pendingApprovalUserId === user.id ? `Approving ${user.username}…` : `Approve ${user.username}` }}
-              </button>
-              <span v-else class="text-zinc-400">—</span>
-            </td>
-          </tr>
+          <template v-for="user in users" :key="user.id">
+            <tr>
+              <td>{{ user.username }}</td>
+              <td class="uppercase">{{ user.role }}</td>
+              <td>
+                <span class="approval-badge" :class="user.approvalStatus === 'approved' ? 'is-approved' : 'is-pending'">
+                  {{ user.approvalStatus === 'approved' ? 'Approved' : 'Pending approval' }}
+                </span>
+              </td>
+              <td>{{ formatDate(user.createdAtIso) }}</td>
+              <td>{{ formatDate(user.lastLoginAtIso) }}</td>
+              <td>
+                <div class="admin-panel-actions">
+                  <button
+                    v-if="user.approvalStatus === 'pending'"
+                    type="button"
+                    class="approve-button"
+                    :disabled="pendingApprovalUserId === user.id"
+                    :aria-label="`Approve ${user.username}`"
+                    @click="void approvePendingUser(user)"
+                  >
+                    {{ pendingApprovalUserId === user.id ? `Approving ${user.username}…` : `Approve ${user.username}` }}
+                  </button>
+                  <button
+                    v-else-if="user.id !== currentUserId"
+                    type="button"
+                    class="recover-button"
+                    :aria-expanded="recoveryTargetUserId === user.id"
+                    @click="toggleRecoveryForm(user)"
+                  >
+                    {{ recoveryTargetUserId === user.id ? 'Cancel recovery' : `Reset password for ${user.username}` }}
+                  </button>
+                  <span v-else class="text-zinc-400">Use local CLI</span>
+                </div>
+              </td>
+            </tr>
+            <tr v-if="recoveryTargetUserId === user.id" class="admin-panel-recovery-row">
+              <td colspan="6">
+                <form class="admin-panel-recovery-form" @submit.prevent="void submitRecovery(user)">
+                  <label class="admin-panel-recovery-field">
+                    <span>Replacement password</span>
+                    <input
+                      v-model="recoveryPassword"
+                      class="admin-panel-recovery-input"
+                      type="password"
+                      autocomplete="new-password"
+                      required
+                    >
+                  </label>
+                  <label class="admin-panel-recovery-field">
+                    <span>Recovery reason</span>
+                    <input
+                      v-model="recoveryReason"
+                      class="admin-panel-recovery-input"
+                      type="text"
+                      maxlength="200"
+                      required
+                    >
+                  </label>
+                  <div class="admin-panel-recovery-actions">
+                    <button
+                      type="submit"
+                      class="approve-button"
+                      :disabled="recoveringUserId === user.id"
+                    >
+                      {{ recoveringUserId === user.id ? 'Resetting…' : 'Confirm reset' }}
+                    </button>
+                    <button type="button" class="admin-panel-cancel" @click="clearRecoveryForm()">Cancel</button>
+                  </div>
+                </form>
+              </td>
+            </tr>
+          </template>
           <tr v-if="users.length === 0">
             <td colspan="6" class="text-center py-6 text-zinc-500">No users found.</td>
           </tr>
@@ -60,7 +110,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+
+const props = defineProps<{
+  currentUserId?: string
+}>()
+const currentUserId = computed(() => props.currentUserId ?? '')
 
 type AdminUser = {
   id: string
@@ -108,6 +163,10 @@ const isLoading = ref(false)
 const errorMessage = ref('')
 const feedbackMessage = ref('')
 const pendingApprovalUserId = ref('')
+const recoveryTargetUserId = ref('')
+const recoveryPassword = ref('')
+const recoveryReason = ref('')
+const recoveringUserId = ref('')
 
 async function refreshUsers(): Promise<void> {
   isLoading.value = true
@@ -158,6 +217,59 @@ async function approvePendingUser(user: AdminUser): Promise<void> {
   }
 }
 
+function clearRecoveryForm(): void {
+  recoveryTargetUserId.value = ''
+  recoveryPassword.value = ''
+  recoveryReason.value = ''
+}
+
+function toggleRecoveryForm(user: AdminUser): void {
+  if (recoveryTargetUserId.value === user.id) {
+    clearRecoveryForm()
+    return
+  }
+  recoveryTargetUserId.value = user.id
+  recoveryPassword.value = ''
+  recoveryReason.value = ''
+  errorMessage.value = ''
+  feedbackMessage.value = ''
+}
+
+async function submitRecovery(user: AdminUser): Promise<void> {
+  if (recoveringUserId.value) return
+  recoveringUserId.value = user.id
+  errorMessage.value = ''
+  feedbackMessage.value = ''
+  try {
+    const response = await fetch(`/codex-api/admin/users/${encodeURIComponent(user.id)}/reset-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        newPassword: recoveryPassword.value,
+        reason: recoveryReason.value.trim(),
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const message = asRecord(payload)?.error
+      errorMessage.value = typeof message === 'string' && message.trim().length > 0
+        ? message
+        : `Failed to reset ${user.username}`
+      return
+    }
+    feedbackMessage.value = `${user.username} password reset completed. Existing sessions were revoked.`
+    clearRecoveryForm()
+    await refreshUsers()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : `Failed to reset ${user.username}`
+  } finally {
+    recoveringUserId.value = ''
+  }
+}
+
 onMounted(() => {
   void refreshUsers()
 })
@@ -180,6 +292,10 @@ onMounted(() => {
 
 .admin-panel-subtitle {
   @apply text-sm text-zinc-500 mt-1;
+}
+
+.admin-panel-note {
+  @apply text-xs text-zinc-500 mt-2;
 }
 
 .admin-panel-refresh {
@@ -224,5 +340,37 @@ onMounted(() => {
 
 .approve-button {
   @apply rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60;
+}
+
+.recover-button {
+  @apply rounded-md border border-zinc-300 bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100;
+}
+
+.admin-panel-actions {
+  @apply flex items-center gap-2;
+}
+
+.admin-panel-recovery-row td {
+  @apply bg-zinc-50;
+}
+
+.admin-panel-recovery-form {
+  @apply flex flex-col gap-3 py-2;
+}
+
+.admin-panel-recovery-field {
+  @apply flex flex-col gap-1.5 text-sm text-zinc-700;
+}
+
+.admin-panel-recovery-input {
+  @apply rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900;
+}
+
+.admin-panel-recovery-actions {
+  @apply flex items-center gap-2;
+}
+
+.admin-panel-cancel {
+  @apply rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100;
 }
 </style>

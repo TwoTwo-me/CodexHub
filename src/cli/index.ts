@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
 import { Command } from 'commander'
 import { createServer as createApp } from '../server/httpServer.js'
-import { createPasswordHash, isSupportedPasswordHash } from '../server/userStore.js'
+import { createSqliteAuthStateStore } from '../server/authStateStore.js'
+import { createPasswordHash, isSupportedPasswordHash, recoverAdminPasswordLocally } from '../server/userStore.js'
 
 const program = new Command().name('codexui').description('Web interface for Codex app-server')
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -366,6 +367,57 @@ async function runHashPassword(options: { password?: string; passwordStdin?: boo
   console.log(options.env ? `CODEXUI_ADMIN_PASSWORD_HASH=${escapeForComposeEnv(passwordHash)}` : passwordHash)
 }
 
+async function runAdminRecover(options: {
+  adminUsername?: string
+  passwordStdin?: boolean
+  reason?: string
+  codeHome?: string
+}) {
+  const username = options.adminUsername?.trim() ?? ''
+  if (!username) {
+    throw new Error('Provide --username for the admin account to recover.')
+  }
+  if (!options.passwordStdin) {
+    throw new Error('Use --password-stdin to provide the replacement password securely.')
+  }
+  const reason = options.reason?.trim() ?? ''
+  if (!reason) {
+    throw new Error('Provide --reason so the recovery action is auditable.')
+  }
+  const codeHome = options.codeHome?.trim()
+  if (codeHome) {
+    process.env.CODEX_HOME = codeHome
+  }
+
+  const newPassword = await readPasswordFromStdin()
+  const recoveredUser = await recoverAdminPasswordLocally({
+    username,
+    newPassword,
+  })
+  const authStateStore = createSqliteAuthStateStore()
+  const revokedSessionCount = authStateStore.revokeSessionsForUser(recoveredUser.id)
+  authStateStore.recordRecoveryAuditEvent({
+    actorType: 'local_cli',
+    targetUserId: recoveredUser.id,
+    targetUsername: recoveredUser.username,
+    eventType: 'last_admin_cli_recovery',
+    reason,
+    metadata: {
+      revokedSessionCount,
+      recoverySurface: 'local_cli',
+    },
+  })
+
+  console.log([
+    '',
+    'Local admin recovery completed.',
+    `  Username: ${recoveredUser.username}`,
+    `  Revoked sessions: ${String(revokedSessionCount)}`,
+    '  Sign in with the replacement password you supplied on stdin.',
+    '',
+  ].join('\n'))
+}
+
 program
   .option('-p, --port <port>', 'port to listen on', process.env.CODEXUI_PORT?.trim() || '3000')
   .option('--host <host>', 'host/interface to bind (default: 127.0.0.1 or CODEXUI_BIND_HOST)')
@@ -385,6 +437,14 @@ program.command('hash-password')
   .option('--password-stdin', 'read the plaintext password from stdin')
   .option('--env', 'print the hash as CODEXUI_ADMIN_PASSWORD_HASH=...')
   .action(runHashPassword)
+
+program.command('admin-recover')
+  .description('Recover an existing admin account from the local Hub host.')
+  .requiredOption('--admin-username <username>', 'existing admin username to recover')
+  .requiredOption('--reason <reason>', 'human-readable recovery reason to store in the audit log')
+  .option('--password-stdin', 'read the replacement password from stdin')
+  .option('--code-home <path>', 'override CODEX_HOME for the recovery operation')
+  .action(runAdminRecover)
 
 program.command('help').description('Show codexui command help').action(() => {
   program.outputHelp()

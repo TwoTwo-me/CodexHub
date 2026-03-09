@@ -491,6 +491,16 @@ export async function findUserById(userId: string): Promise<UserProfile | null> 
   return row ? toUserProfile(rowToStoredUser(row)) : null
 }
 
+export async function findUserByUsername(username: string): Promise<UserProfile | null> {
+  const normalized = normalizeUsername(username)
+  if (!normalized) return null
+
+  await waitForMutations()
+  importLegacyUsersIfNeeded()
+  const row = findUserByUsernameRow(normalized)
+  return row ? toUserProfile(rowToStoredUser(row)) : null
+}
+
 export async function attemptAuthenticateUser(username: string, password: string): Promise<AuthenticationResult> {
   const normalizedUsername = normalizeUsername(username)
   if (!normalizedUsername || !password) {
@@ -644,6 +654,63 @@ export async function approveUser(userId: string, approvedByUserId: string): Pro
     const updatedRow = getHubDatabase().prepare('SELECT * FROM users WHERE id = ?').get(normalizedUserId) as Record<string, unknown>
     return toUserProfile(rowToStoredUser(updatedRow))
   })
+}
+
+async function updateUserPasswordById(userId: string, newPassword: string): Promise<UserProfile> {
+  const normalizedUserId = userId.trim()
+  if (!normalizedUserId) {
+    throw new UserStoreError('invalid_user_id', 'User id is required.', 400)
+  }
+
+  assertValidPassword(newPassword)
+
+  return enqueueMutation(async () => {
+    importLegacyUsersIfNeeded()
+    const currentRow = getHubDatabase().prepare('SELECT * FROM users WHERE id = ?').get(normalizedUserId) as Record<string, unknown> | undefined
+    if (!currentRow) {
+      throw new UserStoreError('user_not_found', `User "${normalizedUserId}" was not found.`, 404)
+    }
+
+    const nowIso = new Date().toISOString()
+    const nextPasswordHash = await hashPassword(newPassword)
+    getHubDatabase().prepare(`
+      UPDATE users
+      SET password_hash = ?,
+          updated_at_iso = ?
+      WHERE id = ?
+    `).run(nextPasswordHash, nowIso, normalizedUserId)
+
+    const updatedRow = getHubDatabase().prepare('SELECT * FROM users WHERE id = ?').get(normalizedUserId) as Record<string, unknown>
+    return toUserProfile(rowToStoredUser(updatedRow))
+  })
+}
+
+export async function resetUserPassword(userId: string, newPassword: string): Promise<UserProfile> {
+  return updateUserPasswordById(userId, newPassword)
+}
+
+export async function recoverAdminPasswordLocally(input: {
+  username: string
+  newPassword: string
+}): Promise<UserProfile> {
+  const normalizedUsername = normalizeUsername(input.username)
+  if (!normalizedUsername) {
+    throw new UserStoreError('invalid_username', 'Username is required.', 400)
+  }
+
+  await waitForMutations()
+  importLegacyUsersIfNeeded()
+  const currentRow = findUserByUsernameRow(normalizedUsername)
+  if (!currentRow) {
+    throw new UserStoreError('user_not_found', `User "${normalizedUsername}" was not found.`, 404)
+  }
+
+  const currentUser = rowToStoredUser(currentRow)
+  if (currentUser.role !== 'admin') {
+    throw new UserStoreError('admin_required', `User "${normalizedUsername}" is not an administrator.`, 403)
+  }
+
+  return updateUserPasswordById(currentUser.id, input.newPassword)
 }
 
 export async function completeBootstrapAdminSetup(input: {

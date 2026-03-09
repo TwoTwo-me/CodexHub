@@ -9,8 +9,9 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { getRequestAuthScopeKey, getRequestAuthenticatedUser } from './requestAuthContext.js'
 import { readHubStatePayload, writeHubStatePayload } from './sqliteStore.js'
+import { createSqliteAuthStateStore, type AuthStateStore } from './authStateStore.js'
 import { OutboundRelayHub, RelayHubError } from './relay/relayHub.js'
-import { approveUser, listUsers } from './userStore.js'
+import { approveUser, listUsers, resetUserPassword } from './userStore.js'
 import {
   deletePushSubscriptionForUserById,
   deletePushSubscriptionForUser,
@@ -89,6 +90,10 @@ type JsonRpcCall = {
   id: number
   method: string
   params?: unknown
+}
+
+type CodexBridgeOptions = {
+  authStateStore?: AuthStateStore
 }
 
 type JsonRpcResponse = {
@@ -3496,8 +3501,9 @@ function readBearerToken(req: IncomingMessage): string {
   return token.trim()
 }
 
-export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
+export function createCodexBridgeMiddleware(options: CodexBridgeOptions = {}): CodexBridgeMiddleware {
   const { runtimeRegistry, relayHub } = getSharedBridgeState()
+  const authStateStore = options.authStateStore ?? createSqliteAuthStateStore()
   const relayRateLimitByIp = new Map<string, RelayEndpointRateLimitRecord>()
   const relayRateLimitByClientKey = new Map<string, RelayEndpointRateLimitRecord>()
   const bootstrapExchangeRateLimitByIp = new Map<string, RelayEndpointRateLimitRecord>()
@@ -3609,10 +3615,10 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         return
       }
 
-      const adminUserActionMatch = /^\/codex-api\/admin\/users\/([^/]+)\/approve$/u.exec(url.pathname)
-      if (req.method === 'POST' && adminUserActionMatch) {
+      const adminApproveUserMatch = /^\/codex-api\/admin\/users\/([^/]+)\/approve$/u.exec(url.pathname)
+      if (req.method === 'POST' && adminApproveUserMatch) {
         const adminUser = requireAdminUser(req)
-        const approvedUserId = decodeURIComponent(adminUserActionMatch[1] ?? '').trim()
+        const approvedUserId = decodeURIComponent(adminApproveUserMatch[1] ?? '').trim()
         if (!approvedUserId) {
           setJson(res, 400, { error: 'User id is required' })
           return
@@ -3622,6 +3628,56 @@ export function createCodexBridgeMiddleware(): CodexBridgeMiddleware {
         setJson(res, 200, {
           data: {
             user: approvedUser,
+          },
+        })
+        return
+      }
+
+      const adminResetPasswordMatch = /^\/codex-api\/admin\/users\/([^/]+)\/reset-password$/u.exec(url.pathname)
+      if (req.method === 'POST' && adminResetPasswordMatch) {
+        const adminUser = requireAdminUser(req)
+        const targetUserId = decodeURIComponent(adminResetPasswordMatch[1] ?? '').trim()
+        if (!targetUserId) {
+          setJson(res, 400, { error: 'User id is required' })
+          return
+        }
+        if (targetUserId === adminUser.id) {
+          setJson(res, 400, { error: 'Use local CLI recovery for the final admin account.' })
+          return
+        }
+
+        const payload = asRecord(await readJsonBody(req))
+        const newPassword = typeof payload?.newPassword === 'string' ? payload.newPassword : ''
+        const reason = typeof payload?.reason === 'string' ? payload.reason.trim() : ''
+        if (!newPassword) {
+          setJson(res, 400, { error: 'New password is required' })
+          return
+        }
+        if (!reason) {
+          setJson(res, 400, { error: 'Recovery reason is required' })
+          return
+        }
+
+        const recoveredUser = await resetUserPassword(targetUserId, newPassword)
+        const revokedSessionCount = authStateStore.revokeSessionsForUser(recoveredUser.id)
+        authStateStore.recordRecoveryAuditEvent({
+          actorUserId: adminUser.id,
+          actorUsername: adminUser.username,
+          actorType: 'admin_api',
+          targetUserId: recoveredUser.id,
+          targetUsername: recoveredUser.username,
+          eventType: 'admin_password_reset',
+          reason,
+          metadata: {
+            revokedSessionCount,
+            recoverySurface: 'admin_api',
+          },
+        })
+
+        setJson(res, 200, {
+          data: {
+            user: recoveredUser,
+            revokedSessionCount,
           },
         })
         return

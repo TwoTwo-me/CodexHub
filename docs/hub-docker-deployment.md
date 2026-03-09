@@ -205,6 +205,8 @@ With the same persisted `${CODEXUI_CODEX_HOME_DIR}` volume:
 - browser login sessions survive normal Hub restart/redeploy
 - bootstrap/setup-required gating is still derived from the user record in SQLite
 - sessions are only invalidated when logout, credential recovery/reset, explicit revoke-all, or a compatibility/security event requires it
+- standard account recovery is admin-assisted from the existing Admin page
+- last-admin recovery is local-only and must be performed from the Hub host CLI/runbook
 
 If the Hub starts against a different or empty `CODEX_HOME`, previously issued browser sessions are not expected to recover.
 
@@ -251,8 +253,11 @@ For public deployments, terminate TLS in front of the Hub and forward:
 
 - `Host`
 - `X-Forwarded-Proto: https`
+- `X-Forwarded-For` and/or `X-Real-IP` **only from a trusted local reverse proxy**
 
 Then make sure `CODEXUI_PUBLIC_URL` matches the public HTTPS origin users and Connectors should use.
+
+The Hub trusts forwarded client IP headers for auth throttling only when the immediate peer is loopback/local proxy. Direct clients should not send those headers themselves.
 
 ## Notes on the root Docker stack vs test fixtures
 

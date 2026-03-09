@@ -199,7 +199,7 @@
             />
           </template>
           <template v-else-if="isAdminRoute">
-            <AdminPanel v-if="isAdminUser" />
+            <AdminPanel v-if="isAdminUser" :current-user-id="sessionUser?.id ?? ''" />
             <section v-else class="admin-guard">
               <h2 class="admin-guard-title">Admin access required</h2>
               <p class="admin-guard-subtitle">This page is only available to administrator accounts.</p>
