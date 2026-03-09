@@ -150,6 +150,12 @@ test('chat thread renders practical GFM blocks without raw html', async ({ page 
   await expect(page.locator('.message-link[href="https://platform.openai.com/docs"]')).toBeVisible()
   await expect(page.locator('.message-file-link', { hasText: 'main.ts (line 12)' })).toBeVisible()
 
+  const userBox = await page.locator('.message-card[data-role="user"]').boundingBox()
+  const assistantBox = await page.locator('.message-card[data-role="assistant"]').boundingBox()
+  expect(userBox).not.toBeNull()
+  expect(assistantBox).not.toBeNull()
+  expect((userBox?.x ?? 0)).toBeGreaterThan((assistantBox?.x ?? 0))
+
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/chat-markdown-rendering-desktop.png`,
     fullPage: true,

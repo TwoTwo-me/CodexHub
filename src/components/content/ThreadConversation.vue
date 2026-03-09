@@ -840,6 +840,19 @@ onBeforeUnmount(() => {
   @apply m-0 w-full flex;
 }
 
+.message-row {
+  @apply relative w-full max-w-180 mx-auto flex;
+}
+
+.message-row[data-role='user'] {
+  @apply justify-end;
+}
+
+.message-row[data-role='assistant'],
+.message-row[data-role='system'] {
+  @apply justify-start;
+}
+
 .live-overlay-inline {
   @apply w-full max-w-180 px-0 py-1 flex flex-col gap-1;
 }
