@@ -129,7 +129,7 @@ test.beforeEach(async ({ page }) => {
           isGitRepo: true,
           files: [
             { path: 'README.md', status: 'modified', additions: 2, deletions: 0 },
-            { path: 'notes.txt', status: 'untracked', additions: 1, deletions: 0 },
+            { path: 'src/components/App.vue', status: 'modified', additions: 5, deletions: 1 },
           ],
         },
       }),
@@ -172,7 +172,7 @@ test.beforeEach(async ({ page }) => {
           isGitRepo: true,
           files: [
             { path: 'README.md', status: 'modified', additions: 3, deletions: 1 },
-            { path: 'notes.txt', status: 'untracked', additions: 1, deletions: 0 },
+            { path: 'src/components/App.vue', status: 'modified', additions: 5, deletions: 1 },
           ],
         },
       }),
@@ -186,7 +186,7 @@ test.beforeEach(async ({ page }) => {
       ? { path, status: 'modified', diffText: '@@ -1 +1,3 @@\n-# hello\n+# hello\n+\n+updated\n', beforeText: '# hello\n', afterText: '# hello\n\nupdated\n' }
       : path.endsWith('App.vue')
         ? { path, status: 'modified', diffText: '@@ -1 +1 @@\n-<template></template>\n+<template><main /></template>\n', beforeText: '<template></template>\n', afterText: '<template><main /></template>\n' }
-        : { path: 'notes.txt', status: 'untracked', diffText: '@@ -0,0 +1 @@\n+pending review\n', beforeText: '', afterText: 'pending review\n' }
+        : { path, status: 'modified', diffText: '@@ -1 +1 @@\n-<template></template>\n+<template><main /></template>\n', beforeText: '<template></template>\n', afterText: '<template><main /></template>\n' }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -289,26 +289,33 @@ test('desktop thread workspace shows independent Review, Scope, and Changes togg
   await expect(page.locator('.thread-review-panel .thread-composer')).toHaveCount(0)
   await expect(page.getByText('Scope browser').first()).toBeVisible()
   await expect(page.getByText('Change navigator').first()).toBeVisible()
+  const scopePanel = page.getByLabel('Scope browser panel')
   await expect(page.getByText('Server: Server A')).toBeVisible()
   await expect(page.getByText('Project: Project Alpha')).toBeVisible()
   await expect(page.getByText('CWD: /srv/server-a/project-alpha')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'docs', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'src', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'README.md', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'photo.png', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'App.vue', exact: true })).toHaveCount(0)
-  await page.getByRole('button', { name: 'src', exact: true }).click()
-  await expect(page.getByRole('button', { name: 'components', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'App.vue', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'App.vue', exact: true }).click()
-  await expect(page.getByText(/App\.vue/)).toBeVisible()
-  await expect(page.getByRole('button', { name: /README\.md modified/i })).toBeVisible()
-  await page.getByRole('button', { name: /README\.md modified/i }).click()
-  await expect(page.getByText('updated')).toBeVisible()
+  await expect(scopePanel.getByRole('button', { name: 'docs', exact: true })).toBeVisible()
+  await expect(scopePanel.getByRole('button', { name: 'src', exact: true })).toBeVisible()
+  await expect(scopePanel.getByRole('button', { name: 'README.md', exact: true })).toBeVisible()
+  await expect(scopePanel.getByRole('button', { name: 'photo.png', exact: true })).toBeVisible()
+  await expect(scopePanel.getByRole('button', { name: 'App.vue', exact: true })).toHaveCount(0)
+  await scopePanel.getByRole('button', { name: 'src', exact: true }).click()
+  await expect(scopePanel.getByRole('button', { name: 'components', exact: true })).toBeVisible()
+  await expect(scopePanel.getByRole('button', { name: 'App.vue', exact: true })).toBeVisible()
+  await scopePanel.getByRole('button', { name: 'App.vue', exact: true }).click()
+  await expect(page.locator('.thread-review-path')).toContainText('App.vue')
+  const changePanel = page.getByLabel('Change navigator panel')
+  await expect(changePanel.getByRole('button', { name: 'src', exact: true })).toBeVisible()
+  await expect(changePanel.getByRole('button', { name: 'components', exact: true })).toHaveCount(0)
+  await changePanel.getByRole('button', { name: 'src', exact: true }).click()
+  await expect(changePanel.getByRole('button', { name: 'components', exact: true })).toBeVisible()
+  await changePanel.getByRole('button', { name: 'components', exact: true }).click()
+  await expect(changePanel.getByRole('button', { name: /App\.vue/i })).toBeVisible()
+  await changePanel.getByRole('button', { name: /App\.vue/i }).click()
+  await expect(page.locator('.thread-review-path')).toContainText('App.vue')
   await page.getByLabel('Review note').fill('Check this change in chat')
   await page.getByRole('button', { name: 'Attach review to chat' }).click()
   await expect(page.getByPlaceholder('Type a message... (@ for files, / for skills)')).toHaveValue(/Check this change in chat/)
-  await expect(page.locator('.thread-composer-file-chip-name').filter({ hasText: 'README.md' }).first()).toBeVisible()
+  await expect(page.locator('.thread-composer-file-chip-name').filter({ hasText: 'App.vue' }).first()).toBeVisible()
 
   await page.getByRole('button', { name: 'Scope', exact: true }).click()
   await expect(page.getByLabel('Scope browser panel')).toHaveCount(0)
@@ -327,13 +334,14 @@ test('desktop thread workspace shows independent Review, Scope, and Changes togg
   await expect(page.getByText('Review to chat', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('Scope browser').first()).toBeVisible()
   await expect(page.getByText('Change navigator').first()).toBeVisible()
+  const reopenedScopePanel = page.getByLabel('Scope browser panel')
   await expect(page.getByText('Server: Server A')).toBeVisible()
   await expect(page.getByText('Project: Project Alpha')).toBeVisible()
   await expect(page.getByText('CWD: /srv/server-a/project-alpha')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'docs', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'src', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'README.md', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'photo.png', exact: true })).toBeVisible()
+  await expect(reopenedScopePanel.getByRole('button', { name: 'docs', exact: true })).toBeVisible()
+  await expect(reopenedScopePanel.getByRole('button', { name: 'src', exact: true })).toBeVisible()
+  await expect(reopenedScopePanel.getByRole('button', { name: 'README.md', exact: true })).toBeVisible()
+  await expect(reopenedScopePanel.getByRole('button', { name: 'photo.png', exact: true })).toBeVisible()
 
   await page.waitForTimeout(1200)
   await page.screenshot({

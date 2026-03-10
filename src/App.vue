@@ -672,6 +672,9 @@ async function refreshThreadReview(): Promise<void> {
 
 function onSelectReviewFile(path: string): void {
   reviewNoteDraft.value = ''
+  if (!isThreadReviewOpen.value) {
+    toggleThreadReview()
+  }
   void loadThreadReviewFile(path)
 }
 
