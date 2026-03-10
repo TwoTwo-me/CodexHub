@@ -1,11 +1,13 @@
 import { spawn } from 'node:child_process'
-import { readdir, stat } from 'node:fs/promises'
+import { readFile, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 export const SERVER_FS_LIST_METHOD = 'codexui/fs/list'
 export const SERVER_PROJECT_ROOT_SUGGESTION_METHOD = 'codexui/project-root-suggestion'
 export const SERVER_COMPOSER_FILE_SEARCH_METHOD = 'codexui/composer-file-search'
+export const SERVER_THREAD_REVIEW_CHANGES_METHOD = 'codexui/thread-review/changes'
+export const SERVER_THREAD_REVIEW_FILE_METHOD = 'codexui/thread-review/file'
 
 export type ServerFsDirectoryEntry = {
   name: string
@@ -28,6 +30,37 @@ export type ServerComposerFileSuggestion = {
   path: string
 }
 
+export type ServerThreadReviewChange = {
+  path: string
+  status: 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked'
+  additions: number
+  deletions: number
+}
+
+export type ServerThreadReviewChanges = {
+  cwd: string
+  repoRoot: string | null
+  branch: string
+  isGitRepo: boolean
+  files: ServerThreadReviewChange[]
+}
+
+export type ServerThreadReviewFile = {
+  path: string
+  status: ServerThreadReviewChange['status']
+  diffText: string
+  beforeText: string
+  afterText: string
+}
+
+export type ServerThreadReviewFilePayload = {
+  cwd: string
+  repoRoot: string | null
+  branch: string
+  isGitRepo: boolean
+  file: ServerThreadReviewFile | null
+}
+
 type ServerFsListParams = {
   path?: string
 }
@@ -40,6 +73,15 @@ type ServerComposerFileSearchParams = {
   cwd?: string
   query?: string
   limit?: number
+}
+
+type ServerThreadReviewChangesParams = {
+  cwd?: string
+}
+
+type ServerThreadReviewFileParams = {
+  cwd?: string
+  path?: string
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -92,10 +134,193 @@ async function listFilesWithRipgrep(cwd: string): Promise<string[]> {
   })
 }
 
+async function runProcess(cwd: string, command: string, args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return await new Promise((resolvePromise, reject) => {
+    const proc = spawn(command, args, {
+      cwd,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    proc.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString()
+    })
+    proc.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+    proc.on('error', reject)
+    proc.on('close', (code) => {
+      resolvePromise({ code, stdout, stderr })
+    })
+  })
+}
+
+async function resolveGitState(cwd: string): Promise<{ cwd: string; repoRoot: string | null; branch: string }> {
+  const root = await runProcess(cwd, 'git', ['rev-parse', '--show-toplevel'])
+  if (root.code !== 0) {
+    return { cwd, repoRoot: null, branch: '' }
+  }
+
+  const repoRoot = root.stdout.trim() || null
+  if (!repoRoot) {
+    return { cwd, repoRoot: null, branch: '' }
+  }
+
+  const branch = await runProcess(cwd, 'git', ['branch', '--show-current'])
+  return {
+    cwd,
+    repoRoot,
+    branch: branch.code === 0 ? branch.stdout.trim() : '',
+  }
+}
+
+function normalizeReviewPath(repoRoot: string, input: string): string {
+  const trimmed = input.trim()
+  if (!trimmed) {
+    throw new Error('Missing path')
+  }
+  const absolute = isAbsolute(trimmed) ? trimmed : resolve(repoRoot, trimmed)
+  const relativePath = relative(repoRoot, absolute).split('\\').join('/')
+  if (relativePath.startsWith('..') || relativePath.length === 0) {
+    throw new Error('Path must stay inside the git repo')
+  }
+  return relativePath
+}
+
+function normalizeReviewStatus(code: string): ServerThreadReviewChange['status'] {
+  if (code === '??') return 'untracked'
+  if (code.includes('R')) return 'renamed'
+  if (code.includes('C')) return 'copied'
+  if (code.includes('D')) return 'deleted'
+  if (code.includes('A')) return 'added'
+  return 'modified'
+}
+
+async function listGitChanges(cwd: string): Promise<ServerThreadReviewChanges> {
+  const git = await resolveGitState(cwd)
+  if (!git.repoRoot) {
+    return {
+      cwd,
+      repoRoot: null,
+      branch: '',
+      isGitRepo: false,
+      files: [],
+    }
+  }
+
+  const result = await runProcess(cwd, 'git', ['status', '--porcelain=v1', '--untracked=all'])
+  if (result.code !== 0) {
+    throw new Error(result.stderr.trim() || result.stdout.trim() || 'git status failed')
+  }
+
+  const rows = result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+
+  const files = await Promise.all(rows.map(async (line) => {
+    const code = line.slice(0, 2)
+    const rawPath = line.slice(3).trim()
+    const path = rawPath.includes(' -> ') ? rawPath.split(' -> ').at(-1)?.trim() ?? rawPath : rawPath
+    const status = normalizeReviewStatus(code)
+    const counts = await runProcess(cwd, 'git', ['diff', '--numstat', '--', path])
+    const first = counts.stdout.trim().split(/\r?\n/)[0] ?? ''
+    const [additionsRaw, deletionsRaw] = first.split(/\s+/u)
+    const additions = Number.isFinite(Number(additionsRaw)) ? Number(additionsRaw) : status === 'untracked' ? 1 : 0
+    const deletions = Number.isFinite(Number(deletionsRaw)) ? Number(deletionsRaw) : 0
+    return { path, status, additions, deletions }
+  }))
+
+  return {
+    cwd,
+    repoRoot: git.repoRoot,
+    branch: git.branch,
+    isGitRepo: true,
+    files,
+  }
+}
+
+function buildUntrackedDiff(path: string, afterText: string): string {
+  const lines = afterText.replace(/\r\n?/gu, '\n').split('\n')
+  const additions = lines.map((line) => `+${line}`).join('\n')
+  return [
+    `diff --git a/${path} b/${path}`,
+    'new file mode 100644',
+    '--- /dev/null',
+    `+++ b/${path}`,
+    `@@ -0,0 +1,${String(lines.length)} @@`,
+    additions,
+  ].join('\n').trim()
+}
+
+async function readGitTrackedText(cwd: string, path: string): Promise<string> {
+  const result = await runProcess(cwd, 'git', ['show', `HEAD:${path}`])
+  if (result.code !== 0) return ''
+  return result.stdout
+}
+
+async function readReviewFile(params: unknown): Promise<ServerThreadReviewFilePayload> {
+  const payload = asRecord(params) as ServerThreadReviewFileParams | null
+  const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
+  const rawPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
+  if (!rawCwd) {
+    throw new Error('Missing cwd')
+  }
+  if (!rawPath) {
+    throw new Error('Missing path')
+  }
+
+  const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+  const git = await resolveGitState(cwd)
+  if (!git.repoRoot) {
+    return {
+      cwd,
+      repoRoot: null,
+      branch: '',
+      isGitRepo: false,
+      file: null,
+    }
+  }
+
+  const path = normalizeReviewPath(git.repoRoot, rawPath)
+  const changes = await listGitChanges(cwd)
+  const current = changes.files.find((item) => item.path === path) ?? {
+    path,
+    status: 'modified' as const,
+    additions: 0,
+    deletions: 0,
+  }
+
+  const absolutePath = resolve(git.repoRoot, path)
+  const afterText = current.status === 'deleted'
+    ? ''
+    : await readFile(absolutePath, 'utf8').catch(() => '')
+  const beforeText = current.status === 'untracked' ? '' : await readGitTrackedText(cwd, path)
+  const diff = await runProcess(cwd, 'git', ['diff', '--no-ext-diff', '--unified=3', '--', path])
+  const diffText = diff.stdout.trim() || (current.status === 'untracked' ? buildUntrackedDiff(path, afterText) : '')
+
+  return {
+    cwd,
+    repoRoot: git.repoRoot,
+    branch: git.branch,
+    isGitRepo: true,
+    file: {
+      path,
+      status: current.status,
+      diffText,
+      beforeText,
+      afterText,
+    },
+  }
+}
+
 export function isServerFsBridgeMethod(method: string): boolean {
   return method === SERVER_FS_LIST_METHOD
     || method === SERVER_PROJECT_ROOT_SUGGESTION_METHOD
     || method === SERVER_COMPOSER_FILE_SEARCH_METHOD
+    || method === SERVER_THREAD_REVIEW_CHANGES_METHOD
+    || method === SERVER_THREAD_REVIEW_FILE_METHOD
 }
 
 export async function executeServerFsBridgeMethod(method: string, params: unknown): Promise<unknown> {
@@ -107,6 +332,12 @@ export async function executeServerFsBridgeMethod(method: string, params: unknow
   }
   if (method === SERVER_COMPOSER_FILE_SEARCH_METHOD) {
     return await searchServerComposerFiles(params)
+  }
+  if (method === SERVER_THREAD_REVIEW_CHANGES_METHOD) {
+    return await listServerThreadReviewChanges(params)
+  }
+  if (method === SERVER_THREAD_REVIEW_FILE_METHOD) {
+    return await readReviewFile(params)
   }
   throw new Error(`Unsupported server fs bridge method "${method}"`)
 }
@@ -220,4 +451,27 @@ export async function searchServerComposerFiles(params: unknown): Promise<Server
     .sort((left, right) => (left.score - right.score) || left.path.localeCompare(right.path))
     .slice(0, limit)
     .map((row) => ({ path: row.path }))
+}
+
+export async function listServerThreadReviewChanges(params: unknown): Promise<ServerThreadReviewChanges> {
+  const payload = asRecord(params) as ServerThreadReviewChangesParams | null
+  const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
+  if (!rawCwd) {
+    throw new Error('Missing cwd')
+  }
+
+  const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+  try {
+    const info = await stat(cwd)
+    if (!info.isDirectory()) {
+      throw new Error('cwd is not a directory')
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'cwd is not a directory') {
+      throw error
+    }
+    throw new Error('cwd does not exist')
+  }
+
+  return await listGitChanges(cwd)
 }

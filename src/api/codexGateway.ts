@@ -21,7 +21,7 @@ import type {
 } from './appServerDtos'
 import { normalizeCodexApiError } from './codexErrors'
 import { normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from './normalizers/v2'
-import type { UiMessage, UiProjectGroup } from '../types/codex'
+import type { UiMessage, UiProjectGroup, UiThreadReviewChanges, UiThreadReviewFilePayload } from '../types/codex'
 import type { SkillSourceId } from '../shared/skillSources.js'
 
 type CurrentModelConfig = {
@@ -769,6 +769,90 @@ export async function searchComposerFiles(cwd: string, query = '', limit = 20): 
       : {}
 
   return normalizeComposerFileSuggestions(envelope.data)
+}
+
+function normalizeThreadReviewChange(row: unknown): UiThreadReviewChanges['files'][number] | null {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null
+  const record = row as Record<string, unknown>
+  const path = typeof record.path === 'string' ? record.path.trim() : ''
+  const status = record.status
+  const additions = typeof record.additions === 'number' && Number.isFinite(record.additions) ? record.additions : 0
+  const deletions = typeof record.deletions === 'number' && Number.isFinite(record.deletions) ? record.deletions : 0
+  if (!path) return null
+  if (status !== 'modified' && status !== 'added' && status !== 'deleted' && status !== 'renamed' && status !== 'copied' && status !== 'untracked') {
+    return null
+  }
+  return { path, status, additions, deletions }
+}
+
+function normalizeThreadReviewChanges(payload: unknown): UiThreadReviewChanges {
+  const record = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+  const filesRaw = Array.isArray(record.files) ? record.files : []
+  return {
+    cwd: typeof record.cwd === 'string' ? record.cwd.trim() : '',
+    repoRoot: typeof record.repoRoot === 'string' && record.repoRoot.trim().length > 0 ? record.repoRoot.trim() : null,
+    branch: typeof record.branch === 'string' ? record.branch.trim() : '',
+    isGitRepo: record.isGitRepo === true,
+    files: filesRaw.map((row) => normalizeThreadReviewChange(row)).filter((row): row is NonNullable<typeof row> => row !== null),
+  }
+}
+
+function normalizeThreadReviewFile(payload: unknown): UiThreadReviewFilePayload {
+  const record = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+  const fileRecord = record.file && typeof record.file === 'object' && !Array.isArray(record.file)
+    ? record.file as Record<string, unknown>
+    : null
+  const status = fileRecord?.status
+  let file: UiThreadReviewFilePayload['file'] = null
+  if (fileRecord && typeof fileRecord.path === 'string' && fileRecord.path.trim().length > 0
+    && (status === 'modified' || status === 'added' || status === 'deleted' || status === 'renamed' || status === 'copied' || status === 'untracked')) {
+    file = {
+      path: fileRecord.path.trim(),
+      status,
+      diffText: typeof fileRecord.diffText === 'string' ? fileRecord.diffText : '',
+      beforeText: typeof fileRecord.beforeText === 'string' ? fileRecord.beforeText : '',
+      afterText: typeof fileRecord.afterText === 'string' ? fileRecord.afterText : '',
+    }
+  }
+  return {
+    cwd: typeof record.cwd === 'string' ? record.cwd.trim() : '',
+    repoRoot: typeof record.repoRoot === 'string' && record.repoRoot.trim().length > 0 ? record.repoRoot.trim() : null,
+    branch: typeof record.branch === 'string' ? record.branch.trim() : '',
+    isGitRepo: record.isGitRepo === true,
+    file,
+  }
+}
+
+export async function getThreadReviewChanges(cwd: string): Promise<UiThreadReviewChanges> {
+  const params = new URLSearchParams({ cwd: cwd.trim() })
+  const response = await fetch(buildServerScopedPath(`/codex-api/thread-review/changes?${params.toString()}`))
+  const payload = await response.json() as unknown
+  if (!response.ok) {
+    const message = getErrorMessageFromPayload(payload, 'Failed to load thread review changes')
+    throw new Error(message)
+  }
+  const envelope = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+  return normalizeThreadReviewChanges(envelope.data)
+}
+
+export async function getThreadReviewFile(cwd: string, path: string): Promise<UiThreadReviewFilePayload> {
+  const params = new URLSearchParams({ cwd: cwd.trim(), path: path.trim() })
+  const response = await fetch(buildServerScopedPath(`/codex-api/thread-review/file?${params.toString()}`))
+  const payload = await response.json() as unknown
+  if (!response.ok) {
+    const message = getErrorMessageFromPayload(payload, 'Failed to load thread review file')
+    throw new Error(message)
+  }
+  const envelope = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+  return normalizeThreadReviewFile(envelope.data)
 }
 
 function normalizeSkillsHubEntry(payload: unknown): SkillsHubEntry | null {

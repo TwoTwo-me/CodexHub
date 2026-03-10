@@ -157,3 +157,34 @@ export type ChatThread = {
   updatedAt: string | null
   messages: ChatMessage[]
 }
+
+export type UiThreadReviewChange = {
+  path: string
+  status: 'modified' | 'added' | 'deleted' | 'renamed' | 'copied' | 'untracked'
+  additions: number
+  deletions: number
+}
+
+export type UiThreadReviewChanges = {
+  cwd: string
+  repoRoot: string | null
+  branch: string
+  isGitRepo: boolean
+  files: UiThreadReviewChange[]
+}
+
+export type UiThreadReviewFile = {
+  path: string
+  status: UiThreadReviewChange['status']
+  diffText: string
+  beforeText: string
+  afterText: string
+}
+
+export type UiThreadReviewFilePayload = {
+  cwd: string
+  repoRoot: string | null
+  branch: string
+  isGitRepo: boolean
+  file: UiThreadReviewFile | null
+}
