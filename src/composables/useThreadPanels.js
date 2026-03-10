@@ -7,6 +7,9 @@ export const DEFAULT_REVIEW_WIDTH = 380
 export const MIN_UTILITY_WIDTH = 260
 export const MAX_UTILITY_WIDTH = 520
 export const DEFAULT_UTILITY_WIDTH = 320
+export const MIN_UTILITY_SPLIT = 0.2
+export const MAX_UTILITY_SPLIT = 0.8
+export const DEFAULT_UTILITY_SPLIT = 0.55
 
 export function createDefaultThreadPanelsState() {
   return {
@@ -15,12 +18,18 @@ export function createDefaultThreadPanelsState() {
     changesOpen: true,
     reviewWidth: DEFAULT_REVIEW_WIDTH,
     utilityWidth: DEFAULT_UTILITY_WIDTH,
+    utilitySplit: DEFAULT_UTILITY_SPLIT,
   }
 }
 
 function clamp(value, minValue, maxValue, fallback = minValue) {
   if (!Number.isFinite(value)) return fallback
   return Math.min(Math.max(Math.round(value), minValue), maxValue)
+}
+
+function clampRatio(value, minValue, maxValue, fallback = minValue) {
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(Math.max(value, minValue), maxValue)
 }
 
 export function normalizeThreadPanelsState(value) {
@@ -35,6 +44,7 @@ export function normalizeThreadPanelsState(value) {
     changesOpen: typeof value.changesOpen === 'boolean' ? value.changesOpen : defaults.changesOpen,
     reviewWidth: clamp(typeof value.reviewWidth === 'number' ? value.reviewWidth : defaults.reviewWidth, MIN_REVIEW_WIDTH, MAX_REVIEW_WIDTH, defaults.reviewWidth),
     utilityWidth: clamp(typeof value.utilityWidth === 'number' ? value.utilityWidth : defaults.utilityWidth, MIN_UTILITY_WIDTH, MAX_UTILITY_WIDTH, defaults.utilityWidth),
+    utilitySplit: clampRatio(typeof value.utilitySplit === 'number' ? value.utilitySplit : defaults.utilitySplit, MIN_UTILITY_SPLIT, MAX_UTILITY_SPLIT, defaults.utilitySplit),
   }
 }
 
@@ -57,6 +67,8 @@ export function reduceThreadPanelsState(state, action) {
       return { ...current, reviewWidth: clamp(action.value, MIN_REVIEW_WIDTH, MAX_REVIEW_WIDTH) }
     case 'set-utility-width':
       return { ...current, utilityWidth: clamp(action.value, MIN_UTILITY_WIDTH, MAX_UTILITY_WIDTH) }
+    case 'set-utility-split':
+      return { ...current, utilitySplit: clampRatio(action.value, MIN_UTILITY_SPLIT, MAX_UTILITY_SPLIT, DEFAULT_UTILITY_SPLIT) }
     default:
       return current
   }
@@ -104,6 +116,7 @@ export function useThreadPanels() {
     changesOpen: computed(() => state.value.changesOpen),
     reviewWidth: computed(() => state.value.reviewWidth),
     utilityWidth: computed(() => state.value.utilityWidth),
+    utilitySplit: computed(() => state.value.utilitySplit),
     toggleReview() {
       apply({ type: 'toggle-review' })
     },
@@ -118,6 +131,9 @@ export function useThreadPanels() {
     },
     setUtilityWidth(value) {
       apply({ type: 'set-utility-width', value })
+    },
+    setUtilitySplit(value) {
+      apply({ type: 'set-utility-split', value })
     },
   }
 }

@@ -1,5 +1,6 @@
 <template>
   <aside class="thread-review-panel" :style="panelStyle">
+    <button class="thread-review-resize-handle" type="button" aria-label="Resize review panel" @mousedown="$emit('resize-start', $event)" />
     <header class="thread-review-panel-header">
       <div>
         <p class="thread-review-panel-eyebrow">{{ title }}</p>
@@ -21,6 +22,10 @@ const props = defineProps<{
   description?: string
 }>()
 
+defineEmits<{
+  'resize-start': [event: MouseEvent]
+}>()
+
 const panelStyle = computed(() => ({
   '--thread-review-width': `${props.width}px`,
 }))
@@ -30,8 +35,17 @@ const panelStyle = computed(() => ({
 @reference "tailwindcss";
 
 .thread-review-panel {
-  @apply shrink-0 min-h-0 flex flex-col border-l border-zinc-200 bg-zinc-50/70;
+  @apply relative shrink-0 min-h-0 flex flex-col border-l border-zinc-200 bg-zinc-50/70;
   width: var(--thread-review-width);
+}
+
+.thread-review-resize-handle {
+  @apply absolute left-0 top-0 bottom-0 w-px bg-zinc-300 hover:bg-zinc-500 cursor-col-resize transition;
+}
+
+.thread-review-resize-handle::before {
+  content: '';
+  @apply absolute -left-2 -right-2 top-0 bottom-0;
 }
 
 .thread-review-panel-header {

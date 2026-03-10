@@ -70,3 +70,13 @@ test('reduceThreadPanelsState clamps persisted widths into safe desktop ranges',
   assert.equal(DEFAULT_REVIEW_WIDTH >= MIN_REVIEW_WIDTH && DEFAULT_REVIEW_WIDTH <= MAX_REVIEW_WIDTH, true)
   assert.equal(DEFAULT_UTILITY_WIDTH >= MIN_UTILITY_WIDTH && DEFAULT_UTILITY_WIDTH <= MAX_UTILITY_WIDTH, true)
 })
+
+
+test('reduceThreadPanelsState clamps utility split between scope and changes panels', () => {
+  const base = createDefaultThreadPanelsState()
+  const narrowed = reduceThreadPanelsState(base, { type: 'set-utility-split', value: 0.05 })
+  assert.equal(narrowed.utilitySplit, 0.2)
+
+  const widened = reduceThreadPanelsState(base, { type: 'set-utility-split', value: 0.95 })
+  assert.equal(widened.utilitySplit, 0.8)
+})
