@@ -166,6 +166,17 @@
               <CwdPicker v-if="isHomeRoute && hasRegisteredServers" v-model="newThreadCwd" />
             </div>
           </template>
+          <template #actions>
+            <ThreadPanelToggles
+              v-if="isThreadRoute && !isMobile"
+              :review-open="isThreadReviewOpen"
+              :scope-open="isThreadScopeOpen"
+              :changes-open="isThreadChangesOpen"
+              @toggle-review="toggleThreadReview()"
+              @toggle-scope="toggleThreadScope()"
+              @toggle-changes="toggleThreadChanges()"
+            />
+          </template>
         </ContentHeader>
 
         <section class="content-body">
@@ -240,19 +251,92 @@
             </div>
           </template>
           <template v-else>
-            <div class="content-grid">
-              <div class="content-thread">
-                <ThreadConversation :messages="filteredMessages" :is-loading="isLoadingMessages"
-                  :active-thread-id="composerThreadContextId" :scroll-state="selectedThreadScrollState"
-                  :live-overlay="liveOverlay"
-                  :request-rail-count="selectedThreadServerRequests.length"
-                  :is-turn-in-progress="isSelectedThreadInProgress"
-                  :is-rolling-back="isRollingBack"
-                  @update-scroll-state="onUpdateThreadScrollState"
-                  @rollback="onRollback" />
+            <div class="thread-workspace">
+              <div class="thread-workspace-chat">
+                <div class="content-thread">
+                  <ThreadConversation :messages="filteredMessages" :is-loading="isLoadingMessages"
+                    :active-thread-id="composerThreadContextId" :scroll-state="selectedThreadScrollState"
+                    :live-overlay="liveOverlay"
+                    :request-rail-count="selectedThreadServerRequests.length"
+                    :is-turn-in-progress="isSelectedThreadInProgress"
+                    :is-rolling-back="isRollingBack"
+                    @update-scroll-state="onUpdateThreadScrollState"
+                    @rollback="onRollback" />
+                </div>
+
+                <div v-if="!isMobile && !isThreadReviewOpen" class="composer-with-queue">
+                  <QueuedMessages
+                    :messages="selectedThreadQueuedMessages"
+                    @steer="steerQueuedMessage"
+                    @delete="removeQueuedMessage"
+                  />
+                  <ThreadRequestRail
+                    :pending-requests="selectedThreadServerRequests"
+                    :has-queue-above="selectedThreadQueuedMessages.length > 0"
+                    @respond-server-request="onRespondServerRequest"
+                  />
+                  <ThreadComposer :active-thread-id="composerThreadContextId"
+                    :cwd="composerCwd"
+                    :models="availableModelIds"
+                    :selected-model="selectedModelId" :selected-reasoning-effort="selectedReasoningEffort"
+                    :skills="installedSkills"
+                    :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
+                    :has-queue-above="selectedThreadQueuedMessages.length > 0 || selectedThreadServerRequests.length > 0"
+                    @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
+                    @update:selected-reasoning-effort="onSelectReasoningEffort" @interrupt="onInterruptTurn" />
+                </div>
               </div>
 
-              <div class="composer-with-queue">
+              <ThreadReviewPanel
+                v-if="!isMobile && isThreadReviewOpen"
+                :width="threadReviewWidth"
+                title="Review to chat"
+                description="Review queue, approvals, and upcoming chat context before sending."
+              >
+                <QueuedMessages
+                  :messages="selectedThreadQueuedMessages"
+                  @steer="steerQueuedMessage"
+                  @delete="removeQueuedMessage"
+                />
+                <ThreadRequestRail
+                  :pending-requests="selectedThreadServerRequests"
+                  :has-queue-above="selectedThreadQueuedMessages.length > 0"
+                  @respond-server-request="onRespondServerRequest"
+                />
+                <ThreadComposer :active-thread-id="composerThreadContextId"
+                  :cwd="composerCwd"
+                  :models="availableModelIds"
+                  :selected-model="selectedModelId" :selected-reasoning-effort="selectedReasoningEffort"
+                  :skills="installedSkills"
+                  :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
+                  :has-queue-above="selectedThreadQueuedMessages.length > 0 || selectedThreadServerRequests.length > 0"
+                  @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
+                  @update:selected-reasoning-effort="onSelectReasoningEffort" @interrupt="onInterruptTurn" />
+              </ThreadReviewPanel>
+
+              <ThreadUtilityPanel
+                v-if="!isMobile && isThreadUtilityOpen"
+                :width="threadUtilityWidth"
+                :scope-open="isThreadScopeOpen"
+                :changes-open="isThreadChangesOpen"
+              >
+                <template #scope>
+                  <div class="thread-panel-copy">
+                    <p class="thread-panel-eyebrow">Scope browser</p>
+                    <p class="thread-panel-copy-line"><strong>Server:</strong> {{ selectedServerLabel }}</p>
+                    <p class="thread-panel-copy-line"><strong>Project:</strong> {{ selectedProjectLabel }}</p>
+                    <p class="thread-panel-copy-line"><strong>CWD:</strong> {{ composerCwd || 'Not available' }}</p>
+                  </div>
+                </template>
+                <template #changes>
+                  <div class="thread-panel-copy">
+                    <p class="thread-panel-eyebrow">Change navigator</p>
+                    <p class="thread-panel-copy-line">Git-backed change summaries will appear here in the next phase.</p>
+                  </div>
+                </template>
+              </ThreadUtilityPanel>
+
+              <div v-if="isMobile" class="composer-with-queue">
                 <QueuedMessages
                   :messages="selectedThreadQueuedMessages"
                   @steer="steerQueuedMessage"
@@ -294,6 +378,9 @@ import ThreadConversation from './components/content/ThreadConversation.vue'
 import ThreadComposer from './components/content/ThreadComposer.vue'
 import QueuedMessages from './components/content/QueuedMessages.vue'
 import ThreadRequestRail from './components/content/ThreadRequestRail.vue'
+import ThreadPanelToggles from './components/content/ThreadPanelToggles.vue'
+import ThreadReviewPanel from './components/content/ThreadReviewPanel.vue'
+import ThreadUtilityPanel from './components/content/ThreadUtilityPanel.vue'
 import CwdPicker from './components/content/CwdPicker.vue'
 import ServerPicker from './components/content/ServerPicker.vue'
 import SkillsHub from './components/content/SkillsHub.vue'
@@ -305,6 +392,7 @@ import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vu
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerX from './components/icons/IconTablerX.vue'
 import { useDesktopState } from './composables/useDesktopState'
+import { useThreadPanels } from './composables/useThreadPanels'
 import { useMobile } from './composables/useMobile'
 import type { ReasoningEffort, ThreadScrollState } from './types/codex'
 
@@ -366,6 +454,17 @@ const {
 const route = useRoute()
 const router = useRouter()
 const { isMobile } = useMobile()
+const {
+  reviewOpen: isThreadReviewOpen,
+  scopeOpen: isThreadScopeOpen,
+  changesOpen: isThreadChangesOpen,
+  utilityOpen: isThreadUtilityOpen,
+  reviewWidth: threadReviewWidth,
+  utilityWidth: threadUtilityWidth,
+  toggleReview: toggleThreadReview,
+  toggleScope: toggleThreadScope,
+  toggleChanges: toggleThreadChanges,
+} = useThreadPanels()
 const isRouteSyncInProgress = ref(false)
 const hasInitialized = ref(false)
 const newThreadCwd = ref('~')
@@ -989,12 +1088,32 @@ async function onLogout(): Promise<void> {
   @apply flex-1 min-h-0 flex flex-col gap-3;
 }
 
+.thread-workspace {
+  @apply flex-1 min-h-0 flex gap-0 overflow-hidden;
+}
+
+.thread-workspace-chat {
+  @apply flex-1 min-w-0 min-h-0 flex flex-col;
+}
+
 .content-thread {
   @apply flex-1 min-h-0;
 }
 
 .composer-with-queue {
   @apply w-full;
+}
+
+.thread-panel-copy {
+  @apply flex flex-col gap-2;
+}
+
+.thread-panel-eyebrow {
+  @apply m-0 text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500;
+}
+
+.thread-panel-copy-line {
+  @apply m-0 text-sm leading-5 text-zinc-700 break-all;
 }
 
 .new-thread-empty {
