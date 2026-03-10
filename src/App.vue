@@ -321,12 +321,11 @@
                 :changes-open="isThreadChangesOpen"
               >
                 <template #scope>
-                  <div class="thread-panel-copy">
-                    <p class="thread-panel-eyebrow">Scope browser</p>
-                    <p class="thread-panel-copy-line"><strong>Server:</strong> {{ selectedServerLabel }}</p>
-                    <p class="thread-panel-copy-line"><strong>Project:</strong> {{ selectedProjectLabel }}</p>
-                    <p class="thread-panel-copy-line"><strong>CWD:</strong> {{ composerCwd || 'Not available' }}</p>
-                  </div>
+                  <ThreadScopePanel
+                    :server-label="selectedServerLabel"
+                    :project-label="selectedProjectLabel"
+                    :cwd="composerCwd"
+                  />
                 </template>
                 <template #changes>
                   <div class="thread-panel-copy">
@@ -381,6 +380,7 @@ import ThreadRequestRail from './components/content/ThreadRequestRail.vue'
 import ThreadPanelToggles from './components/content/ThreadPanelToggles.vue'
 import ThreadReviewPanel from './components/content/ThreadReviewPanel.vue'
 import ThreadUtilityPanel from './components/content/ThreadUtilityPanel.vue'
+import ThreadScopePanel from './components/content/ThreadScopePanel.vue'
 import CwdPicker from './components/content/CwdPicker.vue'
 import ServerPicker from './components/content/ServerPicker.vue'
 import SkillsHub from './components/content/SkillsHub.vue'
