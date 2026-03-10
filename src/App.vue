@@ -235,6 +235,7 @@
 
                 <ThreadComposer :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
+                  ref="composerRef"
                   :models="availableModelIds" :selected-model="selectedModelId"
                   :selected-reasoning-effort="selectedReasoningEffort" :skills="installedSkills"
                   :is-turn-in-progress="false"
@@ -275,15 +276,22 @@
                     :has-queue-above="selectedThreadQueuedMessages.length > 0"
                     @respond-server-request="onRespondServerRequest"
                   />
-                  <ThreadComposer :active-thread-id="composerThreadContextId"
+                  <ThreadComposer
+                    ref="composerRef"
+                    :active-thread-id="composerThreadContextId"
                     :cwd="composerCwd"
                     :models="availableModelIds"
-                    :selected-model="selectedModelId" :selected-reasoning-effort="selectedReasoningEffort"
+                    :selected-model="selectedModelId"
+                    :selected-reasoning-effort="selectedReasoningEffort"
                     :skills="installedSkills"
-                    :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
+                    :is-turn-in-progress="isSelectedThreadInProgress"
+                    :is-interrupting-turn="isInterruptingTurn"
                     :has-queue-above="selectedThreadQueuedMessages.length > 0 || selectedThreadServerRequests.length > 0"
-                    @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
-                    @update:selected-reasoning-effort="onSelectReasoningEffort" @interrupt="onInterruptTurn" />
+                    @submit="onSubmitThreadMessage"
+                    @update:selected-model="onSelectModel"
+                    @update:selected-reasoning-effort="onSelectReasoningEffort"
+                    @interrupt="onInterruptTurn"
+                  />
                 </div>
               </div>
 
@@ -293,25 +301,57 @@
                 title="Review to chat"
                 description="Review queue, approvals, and upcoming chat context before sending."
               >
-                <QueuedMessages
-                  :messages="selectedThreadQueuedMessages"
-                  @steer="steerQueuedMessage"
-                  @delete="removeQueuedMessage"
-                />
-                <ThreadRequestRail
-                  :pending-requests="selectedThreadServerRequests"
-                  :has-queue-above="selectedThreadQueuedMessages.length > 0"
-                  @respond-server-request="onRespondServerRequest"
-                />
-                <ThreadComposer :active-thread-id="composerThreadContextId"
-                  :cwd="composerCwd"
-                  :models="availableModelIds"
-                  :selected-model="selectedModelId" :selected-reasoning-effort="selectedReasoningEffort"
-                  :skills="installedSkills"
-                  :is-turn-in-progress="isSelectedThreadInProgress" :is-interrupting-turn="isInterruptingTurn"
-                  :has-queue-above="selectedThreadQueuedMessages.length > 0 || selectedThreadServerRequests.length > 0"
-                  @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
-                  @update:selected-reasoning-effort="onSelectReasoningEffort" @interrupt="onInterruptTurn" />
+                <div class="thread-review-workbench">
+                  <div class="thread-review-browser">
+                    <p v-if="reviewChangesLoading && !selectedReviewFile" class="thread-review-status">Loading review…</p>
+                    <p v-else-if="reviewErrorMessage" class="thread-review-status thread-review-status-error">{{ reviewErrorMessage }}</p>
+                    <p v-else-if="!reviewIsGitRepo" class="thread-review-status">This thread cwd is not a Git repo yet.</p>
+                    <p v-else-if="!selectedReviewFile" class="thread-review-status">Select a changed file to review it before sending.</p>
+                    <template v-else>
+                      <p class="thread-panel-eyebrow">Selected file</p>
+                      <p class="thread-review-path">{{ selectedReviewFile.path }}</p>
+                      <p v-if="reviewBranch" class="thread-review-branch">Branch {{ reviewBranch }}</p>
+                      <pre class="thread-review-diff">{{ reviewPreviewText }}</pre>
+                      <label class="thread-review-note-field">
+                        <span class="thread-review-note-label">Review note</span>
+                        <textarea
+                          v-model="reviewNoteDraft"
+                          class="thread-review-note-input"
+                          aria-label="Review note"
+                          rows="3"
+                        />
+                      </label>
+                      <button type="button" class="thread-review-attach" @click="onAttachReviewToChat">Attach review to chat</button>
+                    </template>
+                  </div>
+
+                  <QueuedMessages
+                    :messages="selectedThreadQueuedMessages"
+                    @steer="steerQueuedMessage"
+                    @delete="removeQueuedMessage"
+                  />
+                  <ThreadRequestRail
+                    :pending-requests="selectedThreadServerRequests"
+                    :has-queue-above="selectedThreadQueuedMessages.length > 0"
+                    @respond-server-request="onRespondServerRequest"
+                  />
+                  <ThreadComposer
+                    ref="composerRef"
+                    :active-thread-id="composerThreadContextId"
+                    :cwd="composerCwd"
+                    :models="availableModelIds"
+                    :selected-model="selectedModelId"
+                    :selected-reasoning-effort="selectedReasoningEffort"
+                    :skills="installedSkills"
+                    :is-turn-in-progress="isSelectedThreadInProgress"
+                    :is-interrupting-turn="isInterruptingTurn"
+                    :has-queue-above="selectedThreadQueuedMessages.length > 0 || selectedThreadServerRequests.length > 0"
+                    @submit="onSubmitThreadMessage"
+                    @update:selected-model="onSelectModel"
+                    @update:selected-reasoning-effort="onSelectReasoningEffort"
+                    @interrupt="onInterruptTurn"
+                  />
+                </div>
               </ThreadReviewPanel>
 
               <ThreadUtilityPanel
@@ -325,13 +365,18 @@
                     :server-label="selectedServerLabel"
                     :project-label="selectedProjectLabel"
                     :cwd="composerCwd"
+                    @select-file="onSelectReviewFile"
                   />
                 </template>
                 <template #changes>
-                  <div class="thread-panel-copy">
-                    <p class="thread-panel-eyebrow">Change navigator</p>
-                    <p class="thread-panel-copy-line">Git-backed change summaries will appear here in the next phase.</p>
-                  </div>
+                  <ThreadChangesPanel
+                    :files="reviewChanges"
+                    :selected-path="selectedReviewPath"
+                    :is-git-repo="reviewIsGitRepo"
+                    :is-loading="reviewChangesLoading"
+                    :error-message="reviewErrorMessage"
+                    @select-file="onSelectReviewFile"
+                  />
                 </template>
               </ThreadUtilityPanel>
 
@@ -348,6 +393,7 @@
                 />
                 <ThreadComposer :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
+                  ref="composerRef"
                   :models="availableModelIds"
                   :selected-model="selectedModelId" :selected-reasoning-effort="selectedReasoningEffort"
                   :skills="installedSkills"
@@ -381,6 +427,7 @@ import ThreadPanelToggles from './components/content/ThreadPanelToggles.vue'
 import ThreadReviewPanel from './components/content/ThreadReviewPanel.vue'
 import ThreadUtilityPanel from './components/content/ThreadUtilityPanel.vue'
 import ThreadScopePanel from './components/content/ThreadScopePanel.vue'
+import ThreadChangesPanel from './components/content/ThreadChangesPanel.vue'
 import CwdPicker from './components/content/CwdPicker.vue'
 import ServerPicker from './components/content/ServerPicker.vue'
 import SkillsHub from './components/content/SkillsHub.vue'
@@ -392,9 +439,10 @@ import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vu
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerX from './components/icons/IconTablerX.vue'
 import { useDesktopState } from './composables/useDesktopState'
+import { getThreadReviewChanges, getThreadReviewFile } from './api/codexGateway'
 import { useThreadPanels } from './composables/useThreadPanels'
 import { useMobile } from './composables/useMobile'
-import type { ReasoningEffort, ThreadScrollState } from './types/codex'
+import type { ReasoningEffort, ThreadScrollState, UiThreadReviewChange, UiThreadReviewFile } from './types/codex'
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
@@ -465,6 +513,18 @@ const {
   toggleScope: toggleThreadScope,
   toggleChanges: toggleThreadChanges,
 } = useThreadPanels()
+const composerRef = ref<{ applyReviewContext: (payload: { path: string; note?: string }) => void } | null>(null)
+const reviewChanges = ref<UiThreadReviewChange[]>([])
+const reviewIsGitRepo = ref(false)
+const reviewBranch = ref('')
+const reviewErrorMessage = ref('')
+const reviewChangesLoading = ref(false)
+const reviewFileLoading = ref(false)
+const selectedReviewPath = ref('')
+const selectedReviewFile = ref<UiThreadReviewFile | null>(null)
+const reviewNoteDraft = ref('')
+let reviewChangesToken = 0
+let reviewFileToken = 0
 const isRouteSyncInProgress = ref(false)
 const hasInitialized = ref(false)
 const newThreadCwd = ref('~')
@@ -557,6 +617,105 @@ const composerCwd = computed(() => {
   return selectedThread.value?.cwd?.trim() ?? ''
 })
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThread.value?.inProgress === true)
+const reviewPreviewText = computed(() => selectedReviewFile.value?.diffText || selectedReviewFile.value?.afterText || selectedReviewFile.value?.beforeText || '')
+
+function clearThreadReviewState(): void {
+  reviewChanges.value = []
+  reviewIsGitRepo.value = false
+  reviewBranch.value = ''
+  reviewErrorMessage.value = ''
+  reviewChangesLoading.value = false
+  reviewFileLoading.value = false
+  selectedReviewPath.value = ''
+  selectedReviewFile.value = null
+  reviewNoteDraft.value = ''
+}
+
+async function loadThreadReviewFile(path: string): Promise<void> {
+  const cwd = composerCwd.value.trim()
+  if (!cwd || !path) {
+    selectedReviewPath.value = ''
+    selectedReviewFile.value = null
+    return
+  }
+
+  const token = ++reviewFileToken
+  reviewFileLoading.value = true
+  reviewErrorMessage.value = ''
+  selectedReviewPath.value = path
+
+  try {
+    const payload = await getThreadReviewFile(cwd, path)
+    if (token !== reviewFileToken) return
+    selectedReviewFile.value = payload.file
+  } catch (error) {
+    if (token !== reviewFileToken) return
+    selectedReviewFile.value = null
+    reviewErrorMessage.value = error instanceof Error ? error.message : 'Failed to load review file.'
+  } finally {
+    if (token === reviewFileToken) {
+      reviewFileLoading.value = false
+    }
+  }
+}
+
+async function refreshThreadReview(): Promise<void> {
+  const cwd = composerCwd.value.trim()
+  if (!isThreadRoute.value || !cwd) {
+    clearThreadReviewState()
+    return
+  }
+
+  const token = ++reviewChangesToken
+  reviewChangesLoading.value = true
+  reviewErrorMessage.value = ''
+
+  try {
+    const payload = await getThreadReviewChanges(cwd)
+    if (token !== reviewChangesToken) return
+    reviewChanges.value = payload.files
+    reviewIsGitRepo.value = payload.isGitRepo
+    reviewBranch.value = payload.branch
+    const nextPath = payload.files.some((file) => file.path === selectedReviewPath.value)
+      ? selectedReviewPath.value
+      : payload.files[0]?.path ?? ''
+    if (!nextPath) {
+      selectedReviewPath.value = ''
+      selectedReviewFile.value = null
+      return
+    }
+    await loadThreadReviewFile(nextPath)
+  } catch (error) {
+    if (token !== reviewChangesToken) return
+    reviewChanges.value = []
+    reviewIsGitRepo.value = false
+    selectedReviewPath.value = ''
+    selectedReviewFile.value = null
+    reviewErrorMessage.value = error instanceof Error ? error.message : 'Failed to load review changes.'
+  } finally {
+    if (token === reviewChangesToken) {
+      reviewChangesLoading.value = false
+    }
+  }
+}
+
+function onSelectReviewFile(path: string): void {
+  reviewNoteDraft.value = ''
+  void loadThreadReviewFile(path)
+}
+
+function onAttachReviewToChat(): void {
+  const path = selectedReviewFile.value?.path || selectedReviewPath.value
+  if (!path) return
+  composerRef.value?.applyReviewContext({
+    path,
+    note: reviewNoteDraft.value,
+  })
+}
+
+watch([isThreadRoute, composerCwd, selectedServerId], () => {
+  void refreshThreadReview()
+}, { immediate: true })
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeyDown)
   void initialize()

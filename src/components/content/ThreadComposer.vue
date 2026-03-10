@@ -390,6 +390,37 @@ function addFileAttachment(filePath: string): void {
   fileAttachments.value = [...fileAttachments.value, { label, path: normalized, fsPath: normalized }]
 }
 
+function appendExternalText(text: string): void {
+  const value = text.trim()
+  if (!value) return
+  draft.value = draft.value.trim().length > 0 ? `${draft.value.trim()}\n\n${value}` : value
+}
+
+function appendReviewNote(note: string): void {
+  const trimmed = note.trim()
+  if (!trimmed) return
+  draft.value = draft.value ? `${draft.value}\n${trimmed}` : trimmed
+}
+
+function applyReviewContext(payload: { path: string; note?: string }): void {
+  addFileAttachment(payload.path)
+  if (payload.note) appendReviewNote(payload.note)
+  nextTick(() => inputRef.value?.focus())
+}
+
+defineExpose({
+  applyReviewContext,
+  addExternalFileAttachment(filePath: string) {
+    addFileAttachment(filePath)
+  },
+  appendExternalText(text: string) {
+    appendExternalText(text)
+  },
+  focus() {
+    inputRef.value?.focus()
+  },
+})
+
 function isImageFile(file: File): boolean {
   if (file.type.startsWith('image/')) return true
   return /\.(png|jpe?g|gif|webp)$/i.test(file.name)
@@ -674,6 +705,7 @@ watch(
     }
   },
 )
+
 </script>
 
 <style scoped>
