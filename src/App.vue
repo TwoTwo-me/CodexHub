@@ -107,18 +107,21 @@
           Admin
         </button>
 
-        <SidebarThreadTree :groups="projectGroups" :project-display-name-by-id="projectDisplayNameById"
+        <SidebarThreadTree :groups="projectGroups" :groups-by-server-id="sidebarGroupsByServerId" :project-display-name-by-id="projectDisplayNameById"
+          :project-display-name-by-server-id="sidebarProjectDisplayNamesByServerId"
           v-if="!isSidebarCollapsed"
           :available-servers="availableServers"
           :selected-server-id="selectedServerId"
           :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
+          :loading-by-server-id="sidebarLoadingByServerId"
           :search-query="sidebarSearchQuery"
           :has-pending-hooks="hasPendingHooks"
           :hook-count-by-project-name="hookCountByProjectName"
           :hook-count-by-thread-id="hookCountByThreadId"
           @select-server="onSelectServer"
-          @select="onSelectThread"
+          @select="onSelectThreadFromSidebar"
           @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
+          @rename-thread="onRenameThread"
           @remove-project="onRemoveProject" @reorder-project="onReorderProject" />
       </section>
     </template>
@@ -394,6 +397,11 @@ import BootstrapSetupPanel from './components/content/BootstrapSetupPanel.vue'
 import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vue'
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerX from './components/icons/IconTablerX.vue'
+import {
+  toServerTreeKey,
+  upsertServerGroupsCache,
+  upsertServerLoadingCache,
+} from './composables/sidebarExplorerState.js'
 import { useDesktopState } from './composables/useDesktopState'
 import { getThreadReviewChanges } from './api/codexGateway'
 import { useThreadPanels } from './composables/useThreadPanels'
@@ -448,6 +456,7 @@ const {
   setSelectedReasoningEffort,
   respondToPendingServerRequest,
   renameProject,
+  renameThreadTitle,
   removeProject,
   reorderProject,
   toggleAutoRefreshTimer,
@@ -485,6 +494,9 @@ const sidebarSearchQuery = ref('')
 const isSidebarSearchVisible = ref(false)
 const sidebarSearchInputRef = ref<HTMLInputElement | null>(null)
 const lastAnnouncedPendingHookCount = ref(0)
+const sidebarGroupsByServerId = ref<Record<string, typeof projectGroups.value>>({})
+const sidebarLoadingByServerId = ref<Record<string, boolean>>({})
+const sidebarProjectDisplayNamesByServerId = ref<Record<string, Record<string, string>>>({})
 
 const routeThreadId = computed(() => {
   const rawThreadId = route.params.threadId
@@ -569,6 +581,17 @@ const composerCwd = computed(() => {
   return selectedThread.value?.cwd?.trim() ?? ''
 })
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThread.value?.inProgress === true)
+const threadServerIdById = computed(() => {
+  const next = new Map<string, string>()
+  for (const [serverKey, groups] of Object.entries(sidebarGroupsByServerId.value)) {
+    for (const group of groups) {
+      for (const thread of group.threads) {
+        next.set(thread.id, serverKey)
+      }
+    }
+  }
+  return next
+})
 
 function clearThreadReviewState(): void {
   reviewChanges.value = []
@@ -683,24 +706,37 @@ function onSidebarSearchKeydown(event: KeyboardEvent): void {
 }
 
 function onSelectThread(threadId: string): void {
+  void onSelectThreadFromSidebar({ threadId, serverId: selectedServerId.value })
+}
+
+async function ensureSidebarServerSelected(serverId: string): Promise<void> {
+  const normalizedServerId = serverId.trim()
+  if (!normalizedServerId || normalizedServerId === selectedServerId.value) return
+  await selectServer(normalizedServerId)
+}
+
+async function onSelectThreadFromSidebar(payload: { threadId: string; serverId: string }): Promise<void> {
   if (isSetupRequired.value) return
-  if (!threadId) return
-  if (route.name === 'thread' && routeThreadId.value === threadId) return
-  void router.push({ name: 'thread', params: { threadId } })
+  if (!payload.threadId) return
+  await ensureSidebarServerSelected(payload.serverId)
+  if (route.name === 'thread' && routeThreadId.value === payload.threadId) return
+  await router.push({ name: 'thread', params: { threadId: payload.threadId } })
   if (isMobile.value) setSidebarCollapsed(true)
 }
 
-function onArchiveThread(threadId: string): void {
+async function onArchiveThread(payload: { threadId: string; serverId: string }): Promise<void> {
   if (isSetupRequired.value) return
-  void archiveThreadById(threadId)
+  await ensureSidebarServerSelected(payload.serverId)
+  await archiveThreadById(payload.threadId)
 }
 
-function onStartNewThread(_projectName: string): void {
+async function onStartNewThread(payload: { projectName: string; serverId: string }): Promise<void> {
   if (isSetupRequired.value) return
+  await ensureSidebarServerSelected(payload.serverId)
   newThreadCwd.value = '~'
   if (isMobile.value) setSidebarCollapsed(true)
   if (isHomeRoute.value) return
-  void router.push({ name: 'home' })
+  await router.push({ name: 'home' })
 }
 
 function onStartNewThreadFromToolbar(): void {
@@ -711,18 +747,27 @@ function onStartNewThreadFromToolbar(): void {
   void router.push({ name: 'home' })
 }
 
-function onRenameProject(payload: { projectName: string; displayName: string }): void {
+async function onRenameProject(payload: { projectName: string; serverId: string; displayName: string }): Promise<void> {
   if (isSetupRequired.value) return
+  await ensureSidebarServerSelected(payload.serverId)
   renameProject(payload.projectName, payload.displayName)
 }
 
-function onRemoveProject(projectName: string): void {
+async function onRenameThread(payload: { threadId: string; serverId: string; title: string }): Promise<void> {
   if (isSetupRequired.value) return
-  removeProject(projectName)
+  await ensureSidebarServerSelected(payload.serverId)
+  renameThreadTitle(payload.threadId, payload.title)
 }
 
-function onReorderProject(payload: { projectName: string; toIndex: number }): void {
+async function onRemoveProject(payload: { projectName: string; serverId: string }): Promise<void> {
   if (isSetupRequired.value) return
+  await ensureSidebarServerSelected(payload.serverId)
+  removeProject(payload.projectName)
+}
+
+async function onReorderProject(payload: { projectName: string; serverId: string; toIndex: number }): Promise<void> {
+  if (isSetupRequired.value) return
+  await ensureSidebarServerSelected(payload.serverId)
   reorderProject(payload.projectName, payload.toIndex)
 }
 
@@ -933,6 +978,56 @@ watch(isMobile, (mobile) => {
     setSidebarCollapsed(true)
   }
 })
+
+watch(
+  [selectedServerId, projectGroups],
+  ([serverId, groups]) => {
+    const normalizedServerId = serverId.trim()
+    if (!normalizedServerId) return
+    sidebarGroupsByServerId.value = upsertServerGroupsCache(sidebarGroupsByServerId.value, normalizedServerId, groups)
+  },
+  { deep: true, immediate: true },
+)
+
+watch(
+  [selectedServerId, isLoadingThreads],
+  ([serverId, isLoading]) => {
+    const normalizedServerId = serverId.trim()
+    if (!normalizedServerId) return
+    sidebarLoadingByServerId.value = upsertServerLoadingCache(sidebarLoadingByServerId.value, normalizedServerId, isLoading)
+  },
+  { immediate: true },
+)
+
+watch(
+  [selectedServerId, projectDisplayNameById],
+  ([serverId, displayNames]) => {
+    const normalizedServerId = serverId.trim()
+    if (!normalizedServerId) return
+    sidebarProjectDisplayNamesByServerId.value = {
+      ...sidebarProjectDisplayNamesByServerId.value,
+      [toServerTreeKey(normalizedServerId)]: { ...displayNames },
+    }
+  },
+  { deep: true, immediate: true },
+)
+
+watch(
+  availableServers,
+  (servers) => {
+    const allowed = new Set(servers.map((server) => toServerTreeKey(server.id)))
+    sidebarGroupsByServerId.value = Object.fromEntries(
+      Object.entries(sidebarGroupsByServerId.value).filter(([key]) => allowed.has(key)),
+    )
+    sidebarLoadingByServerId.value = Object.fromEntries(
+      Object.entries(sidebarLoadingByServerId.value).filter(([key]) => allowed.has(key)),
+    )
+    sidebarProjectDisplayNamesByServerId.value = Object.fromEntries(
+      Object.entries(sidebarProjectDisplayNamesByServerId.value).filter(([key]) => allowed.has(key)),
+    )
+  },
+  { immediate: true },
+)
 
 watch(
   () => pendingHookCount.value,

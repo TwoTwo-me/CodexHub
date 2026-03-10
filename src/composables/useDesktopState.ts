@@ -2485,6 +2485,19 @@ export function useDesktopState() {
     saveProjectDisplayNames(selectedServerId.value, projectDisplayNameById.value)
   }
 
+  function renameThreadTitle(threadId: string, title: string): void {
+    const normalizedThreadId = threadId.trim()
+    const normalizedTitle = title.trim()
+    if (!normalizedThreadId || !normalizedTitle) return
+    if (threadTitleById.value[normalizedThreadId] === normalizedTitle) return
+    threadTitleById.value = {
+      ...threadTitleById.value,
+      [normalizedThreadId]: normalizedTitle,
+    }
+    applyThreadFlags()
+    void persistThreadTitle(normalizedThreadId, normalizedTitle)
+  }
+
   function removeProject(projectName: string): void {
     if (projectName.length === 0) return
 
@@ -2880,6 +2893,7 @@ export function useDesktopState() {
     setSelectedReasoningEffort,
     respondToPendingServerRequest,
     renameProject,
+    renameThreadTitle,
     removeProject,
     reorderProject,
     pinProjectToTop,
