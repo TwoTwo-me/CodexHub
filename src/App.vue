@@ -333,12 +333,13 @@
                 :width="threadUtilityWidth"
                 :scope-open="isThreadScopeOpen"
                 :changes-open="isThreadChangesOpen"
+                @refresh-scope="scopeRefreshToken += 1"
+                @refresh-changes="void refreshThreadReview()"
               >
                 <template #scope>
                   <ThreadScopePanel
-                    :server-label="selectedServerLabel"
-                    :project-label="selectedProjectLabel"
                     :cwd="composerCwd"
+                    :refresh-token="scopeRefreshToken"
                     @select-file="(path) => onSelectReviewFile(path, 'scope')"
                   />
                 </template>
@@ -502,6 +503,7 @@ const reviewErrorMessage = ref('')
 const reviewChangesLoading = ref(false)
 const reviewTabs = ref<Array<{ key: string; path: string; source: 'scope' | 'changes' }>>([])
 const activeReviewTabKey = ref('')
+const scopeRefreshToken = ref(0)
 let reviewChangesToken = 0
 const isRouteSyncInProgress = ref(false)
 const hasInitialized = ref(false)

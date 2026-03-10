@@ -1,11 +1,5 @@
 <template>
   <div class="thread-scope-panel">
-    <div class="thread-scope-copy">
-      <p class="thread-scope-line"><strong>Server:</strong> {{ serverLabel }}</p>
-      <p class="thread-scope-line"><strong>Project:</strong> {{ projectLabel }}</p>
-      <p class="thread-scope-line"><strong>CWD:</strong> {{ cwd || 'Not available' }}</p>
-    </div>
-
     <p v-if="isLoadingRoot" class="thread-scope-status">Loading files…</p>
     <p v-else-if="errorMessage" class="thread-scope-status thread-scope-status-error">{{ errorMessage }}</p>
     <p v-else-if="visibleRows.length === 0" class="thread-scope-status">No files found for this scope.</p>
@@ -16,7 +10,7 @@
           type="button"
           class="thread-scope-result"
           :class="{ 'is-directory': row.kind === 'directory', 'is-binary': row.kind === 'file' && !row.isText }"
-          :style="{ paddingLeft: `${12 + row.depth * 16}px` }"
+          :style="{ paddingLeft: `${8 + row.depth * 16}px` }"
           @click="void onRowClick(row)"
         >
           <span class="thread-scope-result-prefix" aria-hidden="true">{{ row.kind === 'directory' ? (isExpanded(row.path) ? '▾' : '▸') : row.isText ? '•' : '×' }}</span>
@@ -36,9 +30,8 @@ const emit = defineEmits<{
 }>()
 
 const props = defineProps<{
-  serverLabel: string
-  projectLabel: string
   cwd: string
+  refreshToken?: number
 }>()
 
 const listings = ref<Record<string, FsTreeListing>>({})
@@ -120,16 +113,18 @@ async function onRowClick(row: FsTreeEntry): Promise<void> {
   }
 
   if (!row.isText) {
-    errorMessage.value = 'Binary files are not opened in the review viewer.'
-    return
+    const confirmed = typeof window !== 'undefined'
+      ? window.confirm('This looks like a binary file. Open it in Review to chat anyway?')
+      : false
+    if (!confirmed) return
   }
 
   emit('select-file', row.path)
 }
 
 watch(
-  () => props.cwd,
-  (nextCwd) => {
+  () => [props.cwd, props.refreshToken] as const,
+  ([nextCwd]) => {
     resetTree()
     const cwd = nextCwd.trim()
     if (!cwd) return
@@ -143,19 +138,7 @@ watch(
 @reference "tailwindcss";
 
 .thread-scope-panel {
-  @apply flex min-h-0 flex-col gap-3;
-}
-
-.thread-scope-copy {
-  @apply rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2;
-}
-
-.thread-scope-line {
-  @apply m-0 text-sm text-zinc-700 break-all;
-}
-
-.thread-scope-line + .thread-scope-line {
-  @apply mt-1;
+  @apply flex min-h-0 flex-col gap-2;
 }
 
 .thread-scope-status {
@@ -167,11 +150,11 @@ watch(
 }
 
 .thread-scope-results {
-  @apply m-0 flex min-h-0 flex-col gap-1 overflow-y-auto p-0;
+  @apply m-0 flex min-h-0 flex-col gap-0.5 overflow-y-auto p-0;
 }
 
 .thread-scope-result {
-  @apply flex w-full items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-900;
+  @apply flex w-full items-center gap-1 rounded-md border-0 bg-transparent px-2 py-1 text-left text-xs text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-900;
 }
 
 .thread-scope-result.is-directory {
@@ -179,11 +162,11 @@ watch(
 }
 
 .thread-scope-result.is-binary {
-  @apply text-zinc-400;
+  @apply text-zinc-500;
 }
 
 .thread-scope-result-prefix {
-  @apply inline-flex w-4 shrink-0 items-center justify-center;
+  @apply inline-flex w-4 shrink-0 items-center justify-center text-zinc-400;
 }
 
 .thread-scope-result-name {
