@@ -1,18 +1,12 @@
 import { computed, ref, watch } from 'vue'
 
 export const THREAD_PANELS_STORAGE_KEY = 'codex-web-local.thread-panels.v1'
-export const DEFAULT_REVIEW_WIDTH = 420
-export const DEFAULT_UTILITY_WIDTH = 320
 export const MIN_REVIEW_WIDTH = 280
-export const MAX_REVIEW_WIDTH = 720
-export const MIN_UTILITY_WIDTH = 240
-export const MAX_UTILITY_WIDTH = 480
-
-export function clampPanelWidth(value, minValue, maxValue, fallback) {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return fallback
-  return Math.min(maxValue, Math.max(minValue, Math.round(parsed)))
-}
+export const MAX_REVIEW_WIDTH = 640
+export const DEFAULT_REVIEW_WIDTH = 380
+export const MIN_UTILITY_WIDTH = 260
+export const MAX_UTILITY_WIDTH = 520
+export const DEFAULT_UTILITY_WIDTH = 320
 
 export function createDefaultThreadPanelsState() {
   return {
@@ -24,66 +18,53 @@ export function createDefaultThreadPanelsState() {
   }
 }
 
+function clamp(value, minValue, maxValue, fallback = minValue) {
+  if (!Number.isFinite(value)) return fallback
+  return Math.min(Math.max(Math.round(value), minValue), maxValue)
+}
+
 export function normalizeThreadPanelsState(value) {
-  const fallback = createDefaultThreadPanelsState()
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback
+  const defaults = createDefaultThreadPanelsState()
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return defaults
+  }
 
-  const record = value
   return {
-    reviewOpen: record.reviewOpen !== false,
-    scopeOpen: record.scopeOpen !== false,
-    changesOpen: record.changesOpen !== false,
-    reviewWidth: clampPanelWidth(record.reviewWidth, MIN_REVIEW_WIDTH, MAX_REVIEW_WIDTH, fallback.reviewWidth),
-    utilityWidth: clampPanelWidth(record.utilityWidth, MIN_UTILITY_WIDTH, MAX_UTILITY_WIDTH, fallback.utilityWidth),
+    reviewOpen: typeof value.reviewOpen === 'boolean' ? value.reviewOpen : defaults.reviewOpen,
+    scopeOpen: typeof value.scopeOpen === 'boolean' ? value.scopeOpen : defaults.scopeOpen,
+    changesOpen: typeof value.changesOpen === 'boolean' ? value.changesOpen : defaults.changesOpen,
+    reviewWidth: clamp(typeof value.reviewWidth === 'number' ? value.reviewWidth : defaults.reviewWidth, MIN_REVIEW_WIDTH, MAX_REVIEW_WIDTH, defaults.reviewWidth),
+    utilityWidth: clamp(typeof value.utilityWidth === 'number' ? value.utilityWidth : defaults.utilityWidth, MIN_UTILITY_WIDTH, MAX_UTILITY_WIDTH, defaults.utilityWidth),
   }
 }
 
-export function utilityPanelOpen(state) {
-  return state.scopeOpen === true || state.changesOpen === true
+export function isUtilityPanelOpen(state) {
+  return state.scopeOpen || state.changesOpen
 }
 
-export function toggleThreadPanel(state, panel) {
+export function reduceThreadPanelsState(state, action) {
   const current = normalizeThreadPanelsState(state)
-  if (panel === 'review') {
-    return {
-      ...current,
-      reviewOpen: !current.reviewOpen,
-    }
+  if (!action || typeof action !== 'object') return current
+
+  switch (action.type) {
+    case 'toggle-review':
+      return { ...current, reviewOpen: !current.reviewOpen }
+    case 'toggle-scope':
+      return { ...current, scopeOpen: !current.scopeOpen }
+    case 'toggle-changes':
+      return { ...current, changesOpen: !current.changesOpen }
+    case 'set-review-width':
+      return { ...current, reviewWidth: clamp(action.value, MIN_REVIEW_WIDTH, MAX_REVIEW_WIDTH) }
+    case 'set-utility-width':
+      return { ...current, utilityWidth: clamp(action.value, MIN_UTILITY_WIDTH, MAX_UTILITY_WIDTH) }
+    default:
+      return current
   }
-  if (panel === 'scope') {
-    return {
-      ...current,
-      scopeOpen: !current.scopeOpen,
-    }
-  }
-  if (panel === 'changes') {
-    return {
-      ...current,
-      changesOpen: !current.changesOpen,
-    }
-  }
-  return current
 }
 
-export function setThreadPanelWidth(state, panel, width) {
-  const current = normalizeThreadPanelsState(state)
-  if (panel === 'review') {
-    return {
-      ...current,
-      reviewWidth: clampPanelWidth(width, MIN_REVIEW_WIDTH, MAX_REVIEW_WIDTH, current.reviewWidth),
-    }
-  }
-  if (panel === 'utility') {
-    return {
-      ...current,
-      utilityWidth: clampPanelWidth(width, MIN_UTILITY_WIDTH, MAX_UTILITY_WIDTH, current.utilityWidth),
-    }
-  }
-  return current
-}
+export function loadThreadPanelsState(storage = typeof window === 'undefined' ? null : window.localStorage) {
+  if (!storage) return createDefaultThreadPanelsState()
 
-export function loadThreadPanelsState(storage) {
-  if (!storage?.getItem) return createDefaultThreadPanelsState()
   try {
     const raw = storage.getItem(THREAD_PANELS_STORAGE_KEY)
     if (!raw) return createDefaultThreadPanelsState()
@@ -93,61 +74,50 @@ export function loadThreadPanelsState(storage) {
   }
 }
 
-export function saveThreadPanelsState(storage, state) {
-  if (!storage?.setItem) return
+export function saveThreadPanelsState(state, storage = typeof window === 'undefined' ? null : window.localStorage) {
+  if (!storage) return
   storage.setItem(THREAD_PANELS_STORAGE_KEY, JSON.stringify(normalizeThreadPanelsState(state)))
 }
 
-export function useThreadPanels(storage = typeof window === 'undefined' ? null : window.localStorage) {
-  const state = ref(loadThreadPanelsState(storage))
+export function useThreadPanels() {
+  const state = ref(loadThreadPanelsState())
 
   watch(
     state,
-    (nextValue) => {
-      saveThreadPanelsState(storage, nextValue)
+    (value) => {
+      saveThreadPanelsState(value)
     },
     { deep: true },
   )
 
-  const reviewOpen = computed(() => state.value.reviewOpen)
-  const scopeOpen = computed(() => state.value.scopeOpen)
-  const changesOpen = computed(() => state.value.changesOpen)
-  const reviewWidth = computed(() => state.value.reviewWidth)
-  const utilityWidth = computed(() => state.value.utilityWidth)
-  const utilityOpen = computed(() => utilityPanelOpen(state.value))
+  const utilityOpen = computed(() => isUtilityPanelOpen(state.value))
 
-  function toggleReview() {
-    state.value = toggleThreadPanel(state.value, 'review')
-  }
-
-  function toggleScope() {
-    state.value = toggleThreadPanel(state.value, 'scope')
-  }
-
-  function toggleChanges() {
-    state.value = toggleThreadPanel(state.value, 'changes')
-  }
-
-  function setReviewWidth(value) {
-    state.value = setThreadPanelWidth(state.value, 'review', value)
-  }
-
-  function setUtilityWidth(value) {
-    state.value = setThreadPanelWidth(state.value, 'utility', value)
+  function apply(action) {
+    state.value = reduceThreadPanelsState(state.value, action)
   }
 
   return {
     state,
-    reviewOpen,
-    scopeOpen,
-    changesOpen,
     utilityOpen,
-    reviewWidth,
-    utilityWidth,
-    toggleReview,
-    toggleScope,
-    toggleChanges,
-    setReviewWidth,
-    setUtilityWidth,
+    reviewOpen: computed(() => state.value.reviewOpen),
+    scopeOpen: computed(() => state.value.scopeOpen),
+    changesOpen: computed(() => state.value.changesOpen),
+    reviewWidth: computed(() => state.value.reviewWidth),
+    utilityWidth: computed(() => state.value.utilityWidth),
+    toggleReview() {
+      apply({ type: 'toggle-review' })
+    },
+    toggleScope() {
+      apply({ type: 'toggle-scope' })
+    },
+    toggleChanges() {
+      apply({ type: 'toggle-changes' })
+    },
+    setReviewWidth(value) {
+      apply({ type: 'set-review-width', value })
+    },
+    setUtilityWidth(value) {
+      apply({ type: 'set-utility-width', value })
+    },
   }
 }
