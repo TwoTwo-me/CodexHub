@@ -9,6 +9,8 @@ export const SERVER_PROJECT_ROOT_SUGGESTION_METHOD = 'codexui/project-root-sugge
 export const SERVER_COMPOSER_FILE_SEARCH_METHOD = 'codexui/composer-file-search'
 export const SERVER_THREAD_REVIEW_CHANGES_METHOD = 'codexui/thread-review/changes'
 export const SERVER_THREAD_REVIEW_FILE_METHOD = 'codexui/thread-review/file'
+export const SERVER_THREAD_REVIEW_DOCUMENT_METHOD = 'codexui/thread-review/document'
+export const SERVER_THREAD_REVIEW_WINDOW_METHOD = 'codexui/thread-review/window'
 
 export type ServerFsDirectoryEntry = {
   name: string
@@ -80,6 +82,30 @@ export type ServerThreadReviewFilePayload = {
   file: ServerThreadReviewFile | null
 }
 
+export type ServerThreadReviewDocument = {
+  cwd: string
+  path: string
+  source: 'scope' | 'changes'
+  mode: 'file' | 'change'
+  repoRoot: string | null
+  branch: string
+  isGitRepo: boolean
+  isText: boolean
+  totalLines: number
+  status: ServerThreadReviewChange['status'] | null
+}
+
+export type ServerThreadReviewWindow = {
+  cwd: string
+  path: string
+  source: 'scope' | 'changes'
+  mode: 'file' | 'change'
+  startLine: number
+  lineCount: number
+  totalLines: number
+  lines: string[]
+}
+
 type ServerFsListParams = {
   path?: string
 }
@@ -106,6 +132,20 @@ type ServerThreadReviewChangesParams = {
 type ServerThreadReviewFileParams = {
   cwd?: string
   path?: string
+}
+
+type ServerThreadReviewDocumentParams = {
+  cwd?: string
+  path?: string
+  source?: string
+}
+
+type ServerThreadReviewWindowParams = {
+  cwd?: string
+  path?: string
+  source?: string
+  startLine?: number
+  lineCount?: number
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -288,6 +328,15 @@ function normalizeReviewStatus(code: string): ServerThreadReviewChange['status']
   return 'modified'
 }
 
+function normalizeReviewSource(value: string | undefined): 'scope' | 'changes' {
+  return value === 'changes' ? 'changes' : 'scope'
+}
+
+function splitReviewLines(text: string): string[] {
+  if (!text) return []
+  return text.replace(/\r\n?/gu, '\n').split('\n')
+}
+
 async function listGitChanges(cwd: string): Promise<ServerThreadReviewChanges> {
   const git = await resolveGitState(cwd)
   if (!git.repoRoot) {
@@ -351,6 +400,56 @@ async function readGitTrackedText(cwd: string, path: string): Promise<string> {
   return result.stdout
 }
 
+async function readScopeReviewContent(cwd: string, rawPath: string): Promise<{
+  cwd: string
+  path: string
+  repoRoot: string | null
+  branch: string
+  isGitRepo: boolean
+  isText: boolean
+  text: string
+}> {
+  const currentPath = normalizeFsTreePath(cwd, rawPath)
+  const info = await stat(currentPath)
+  if (!info.isFile()) {
+    throw new Error('Path exists but is not a file')
+  }
+  const git = await resolveGitState(cwd)
+  const isText = isLikelyTextFile(currentPath)
+  return {
+    cwd,
+    path: currentPath,
+    repoRoot: git.repoRoot,
+    branch: git.branch,
+    isGitRepo: !!git.repoRoot,
+    isText,
+    text: isText ? await readFile(currentPath, 'utf8') : '',
+  }
+}
+
+async function readChangeReviewContent(cwd: string, rawPath: string): Promise<{
+  cwd: string
+  path: string
+  repoRoot: string | null
+  branch: string
+  isGitRepo: boolean
+  isText: boolean
+  status: ServerThreadReviewChange['status'] | null
+  diffText: string
+}> {
+  const payload = await readReviewFile({ cwd, path: rawPath })
+  return {
+    cwd: payload.cwd,
+    path: payload.file?.path ?? rawPath,
+    repoRoot: payload.repoRoot,
+    branch: payload.branch,
+    isGitRepo: payload.isGitRepo,
+    isText: payload.file ? isLikelyTextFile(payload.file.path) : false,
+    status: payload.file?.status ?? null,
+    diffText: payload.file?.diffText ?? '',
+  }
+}
+
 async function readReviewFile(params: unknown): Promise<ServerThreadReviewFilePayload> {
   const payload = asRecord(params) as ServerThreadReviewFileParams | null
   const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
@@ -406,6 +505,101 @@ async function readReviewFile(params: unknown): Promise<ServerThreadReviewFilePa
   }
 }
 
+async function readReviewDocument(params: unknown): Promise<ServerThreadReviewDocument> {
+  const payload = asRecord(params) as ServerThreadReviewDocumentParams | null
+  const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
+  const rawPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
+  const source = normalizeReviewSource(typeof payload?.source === 'string' ? payload.source.trim() : '')
+  if (!rawCwd) {
+    throw new Error('Missing cwd')
+  }
+  if (!rawPath) {
+    throw new Error('Missing path')
+  }
+
+  const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+  if (source === 'changes') {
+    const review = await readChangeReviewContent(cwd, rawPath)
+    const lines = splitReviewLines(review.diffText)
+    return {
+      cwd: review.cwd,
+      path: review.path,
+      source,
+      mode: 'change',
+      repoRoot: review.repoRoot,
+      branch: review.branch,
+      isGitRepo: review.isGitRepo,
+      isText: review.isText,
+      totalLines: lines.length,
+      status: review.status,
+    }
+  }
+
+  const file = await readScopeReviewContent(cwd, rawPath)
+  const lines = splitReviewLines(file.text)
+  return {
+    cwd: file.cwd,
+    path: file.path,
+    source,
+    mode: 'file',
+    repoRoot: file.repoRoot,
+    branch: file.branch,
+    isGitRepo: file.isGitRepo,
+    isText: file.isText,
+    totalLines: lines.length,
+    status: null,
+  }
+}
+
+async function readReviewWindow(params: unknown): Promise<ServerThreadReviewWindow> {
+  const payload = asRecord(params) as ServerThreadReviewWindowParams | null
+  const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
+  const rawPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
+  const source = normalizeReviewSource(typeof payload?.source === 'string' ? payload.source.trim() : '')
+  if (!rawCwd) {
+    throw new Error('Missing cwd')
+  }
+  if (!rawPath) {
+    throw new Error('Missing path')
+  }
+
+  const startLine = typeof payload?.startLine === 'number' && Number.isFinite(payload.startLine)
+    ? Math.max(0, Math.floor(payload.startLine))
+    : 0
+  const lineCount = typeof payload?.lineCount === 'number' && Number.isFinite(payload.lineCount)
+    ? Math.max(1, Math.min(400, Math.floor(payload.lineCount)))
+    : 80
+  const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+
+  if (source === 'changes') {
+    const review = await readChangeReviewContent(cwd, rawPath)
+    const lines = review.isText ? splitReviewLines(review.diffText) : []
+    return {
+      cwd: review.cwd,
+      path: review.path,
+      source,
+      mode: 'change',
+      startLine,
+      lineCount,
+      totalLines: lines.length,
+      lines: lines.slice(startLine, startLine + lineCount),
+    }
+  }
+
+  const file = await readScopeReviewContent(cwd, rawPath)
+  const lines = file.isText ? splitReviewLines(file.text) : []
+  return {
+    cwd: file.cwd,
+    path: file.path,
+    source,
+    mode: 'file',
+    startLine,
+    lineCount,
+    totalLines: lines.length,
+    lines: lines.slice(startLine, startLine + lineCount),
+  }
+}
+
 export function isServerFsBridgeMethod(method: string): boolean {
   return method === SERVER_FS_LIST_METHOD
     || method === SERVER_FS_TREE_METHOD
@@ -413,6 +607,8 @@ export function isServerFsBridgeMethod(method: string): boolean {
     || method === SERVER_COMPOSER_FILE_SEARCH_METHOD
     || method === SERVER_THREAD_REVIEW_CHANGES_METHOD
     || method === SERVER_THREAD_REVIEW_FILE_METHOD
+    || method === SERVER_THREAD_REVIEW_DOCUMENT_METHOD
+    || method === SERVER_THREAD_REVIEW_WINDOW_METHOD
 }
 
 export async function executeServerFsBridgeMethod(method: string, params: unknown): Promise<unknown> {
@@ -433,6 +629,12 @@ export async function executeServerFsBridgeMethod(method: string, params: unknow
   }
   if (method === SERVER_THREAD_REVIEW_FILE_METHOD) {
     return await readReviewFile(params)
+  }
+  if (method === SERVER_THREAD_REVIEW_DOCUMENT_METHOD) {
+    return await readReviewDocument(params)
+  }
+  if (method === SERVER_THREAD_REVIEW_WINDOW_METHOD) {
+    return await readReviewWindow(params)
   }
   throw new Error(`Unsupported server fs bridge method "${method}"`)
 }

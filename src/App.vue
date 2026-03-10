@@ -301,28 +301,12 @@
                 title="Review to chat"
                 description="Review queue, approvals, and upcoming chat context before sending."
               >
-                <div class="thread-review-browser">
-                  <p v-if="reviewChangesLoading && !selectedReviewFile" class="thread-review-status">Loading review…</p>
-                  <p v-else-if="reviewErrorMessage" class="thread-review-status thread-review-status-error">{{ reviewErrorMessage }}</p>
-                  <p v-else-if="!reviewIsGitRepo" class="thread-review-status">This thread cwd is not a Git repo yet.</p>
-                  <p v-else-if="!selectedReviewFile" class="thread-review-status">Select a changed file to review it before sending.</p>
-                  <template v-else>
-                    <p class="thread-panel-eyebrow">Selected file</p>
-                    <p class="thread-review-path">{{ selectedReviewFile.path }}</p>
-                    <p v-if="reviewBranch" class="thread-review-branch">Branch {{ reviewBranch }}</p>
-                    <pre class="thread-review-diff">{{ reviewPreviewText }}</pre>
-                    <label class="thread-review-note-field">
-                      <span class="thread-review-note-label">Review note</span>
-                      <textarea
-                        v-model="reviewNoteDraft"
-                        class="thread-review-note-input"
-                        aria-label="Review note"
-                        rows="3"
-                      />
-                    </label>
-                    <button type="button" class="thread-review-attach" @click="onAttachReviewToChat">Attach review to chat</button>
-                  </template>
-                </div>
+                <ThreadReviewViewer
+                  :cwd="composerCwd"
+                  :path="selectedReviewPath"
+                  :source="selectedReviewSource"
+                  @attach-review="onAttachReviewToChat"
+                />
               </ThreadReviewPanel>
 
               <ThreadUtilityPanel
@@ -336,7 +320,7 @@
                     :server-label="selectedServerLabel"
                     :project-label="selectedProjectLabel"
                     :cwd="composerCwd"
-                    @select-file="onSelectReviewFile"
+                    @select-file="(path) => onSelectReviewFile(path, 'scope')"
                   />
                 </template>
                 <template #changes>
@@ -346,7 +330,7 @@
                     :is-git-repo="reviewIsGitRepo"
                     :is-loading="reviewChangesLoading"
                     :error-message="reviewErrorMessage"
-                    @select-file="onSelectReviewFile"
+                    @select-file="(path) => onSelectReviewFile(path, 'changes')"
                   />
                 </template>
               </ThreadUtilityPanel>
@@ -396,6 +380,7 @@ import QueuedMessages from './components/content/QueuedMessages.vue'
 import ThreadRequestRail from './components/content/ThreadRequestRail.vue'
 import ThreadPanelToggles from './components/content/ThreadPanelToggles.vue'
 import ThreadReviewPanel from './components/content/ThreadReviewPanel.vue'
+import ThreadReviewViewer from './components/content/ThreadReviewViewer.vue'
 import ThreadUtilityPanel from './components/content/ThreadUtilityPanel.vue'
 import ThreadScopePanel from './components/content/ThreadScopePanel.vue'
 import ThreadChangesPanel from './components/content/ThreadChangesPanel.vue'
@@ -410,10 +395,10 @@ import SidebarThreadControls from './components/sidebar/SidebarThreadControls.vu
 import IconTablerSearch from './components/icons/IconTablerSearch.vue'
 import IconTablerX from './components/icons/IconTablerX.vue'
 import { useDesktopState } from './composables/useDesktopState'
-import { getThreadReviewChanges, getThreadReviewFile } from './api/codexGateway'
+import { getThreadReviewChanges } from './api/codexGateway'
 import { useThreadPanels } from './composables/useThreadPanels'
 import { useMobile } from './composables/useMobile'
-import type { ReasoningEffort, ThreadScrollState, UiThreadReviewChange, UiThreadReviewFile } from './types/codex'
+import type { ReasoningEffort, ThreadScrollState, UiThreadReviewChange } from './types/codex'
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
 const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
@@ -487,15 +472,11 @@ const {
 const composerRef = ref<{ applyReviewContext: (payload: { path: string; note?: string }) => void } | null>(null)
 const reviewChanges = ref<UiThreadReviewChange[]>([])
 const reviewIsGitRepo = ref(false)
-const reviewBranch = ref('')
 const reviewErrorMessage = ref('')
 const reviewChangesLoading = ref(false)
-const reviewFileLoading = ref(false)
 const selectedReviewPath = ref('')
-const selectedReviewFile = ref<UiThreadReviewFile | null>(null)
-const reviewNoteDraft = ref('')
+const selectedReviewSource = ref<'scope' | 'changes'>('changes')
 let reviewChangesToken = 0
-let reviewFileToken = 0
 const isRouteSyncInProgress = ref(false)
 const hasInitialized = ref(false)
 const newThreadCwd = ref('~')
@@ -588,46 +569,14 @@ const composerCwd = computed(() => {
   return selectedThread.value?.cwd?.trim() ?? ''
 })
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThread.value?.inProgress === true)
-const reviewPreviewText = computed(() => selectedReviewFile.value?.diffText || selectedReviewFile.value?.afterText || selectedReviewFile.value?.beforeText || '')
 
 function clearThreadReviewState(): void {
   reviewChanges.value = []
   reviewIsGitRepo.value = false
-  reviewBranch.value = ''
   reviewErrorMessage.value = ''
   reviewChangesLoading.value = false
-  reviewFileLoading.value = false
   selectedReviewPath.value = ''
-  selectedReviewFile.value = null
-  reviewNoteDraft.value = ''
-}
-
-async function loadThreadReviewFile(path: string): Promise<void> {
-  const cwd = composerCwd.value.trim()
-  if (!cwd || !path) {
-    selectedReviewPath.value = ''
-    selectedReviewFile.value = null
-    return
-  }
-
-  const token = ++reviewFileToken
-  reviewFileLoading.value = true
-  reviewErrorMessage.value = ''
-  selectedReviewPath.value = path
-
-  try {
-    const payload = await getThreadReviewFile(cwd, path)
-    if (token !== reviewFileToken) return
-    selectedReviewFile.value = payload.file
-  } catch (error) {
-    if (token !== reviewFileToken) return
-    selectedReviewFile.value = null
-    reviewErrorMessage.value = error instanceof Error ? error.message : 'Failed to load review file.'
-  } finally {
-    if (token === reviewFileToken) {
-      reviewFileLoading.value = false
-    }
-  }
+  selectedReviewSource.value = 'changes'
 }
 
 async function refreshThreadReview(): Promise<void> {
@@ -646,22 +595,21 @@ async function refreshThreadReview(): Promise<void> {
     if (token !== reviewChangesToken) return
     reviewChanges.value = payload.files
     reviewIsGitRepo.value = payload.isGitRepo
-    reviewBranch.value = payload.branch
     const nextPath = payload.files.some((file) => file.path === selectedReviewPath.value)
       ? selectedReviewPath.value
       : payload.files[0]?.path ?? ''
     if (!nextPath) {
       selectedReviewPath.value = ''
-      selectedReviewFile.value = null
       return
     }
-    await loadThreadReviewFile(nextPath)
+    selectedReviewPath.value = nextPath
+    selectedReviewSource.value = 'changes'
   } catch (error) {
     if (token !== reviewChangesToken) return
     reviewChanges.value = []
     reviewIsGitRepo.value = false
     selectedReviewPath.value = ''
-    selectedReviewFile.value = null
+    selectedReviewSource.value = 'changes'
     reviewErrorMessage.value = error instanceof Error ? error.message : 'Failed to load review changes.'
   } finally {
     if (token === reviewChangesToken) {
@@ -670,20 +618,23 @@ async function refreshThreadReview(): Promise<void> {
   }
 }
 
-function onSelectReviewFile(path: string): void {
-  reviewNoteDraft.value = ''
+function onSelectReviewFile(path: string, source: 'scope' | 'changes'): void {
   if (!isThreadReviewOpen.value) {
     toggleThreadReview()
   }
-  void loadThreadReviewFile(path)
+  selectedReviewPath.value = path
+  selectedReviewSource.value = source
 }
 
-function onAttachReviewToChat(): void {
-  const path = selectedReviewFile.value?.path || selectedReviewPath.value
+function onAttachReviewToChat(payload: { path: string; source: 'scope' | 'changes'; repoRoot: string | null; note: string }): void {
+  const rawPath = payload.path.trim()
+  const path = payload.source === 'changes' && payload.repoRoot && !rawPath.startsWith('/')
+    ? `${payload.repoRoot.replace(/[/\\]+$/u, '')}/${rawPath.replace(/^[/\\]+/u, '')}`
+    : rawPath
   if (!path) return
   composerRef.value?.applyReviewContext({
     path,
-    note: reviewNoteDraft.value,
+    note: payload.note,
   })
 }
 

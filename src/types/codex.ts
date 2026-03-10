@@ -188,3 +188,27 @@ export type UiThreadReviewFilePayload = {
   isGitRepo: boolean
   file: UiThreadReviewFile | null
 }
+
+export type UiThreadReviewDocument = {
+  cwd: string
+  path: string
+  source: 'scope' | 'changes'
+  mode: 'file' | 'change'
+  repoRoot: string | null
+  branch: string
+  isGitRepo: boolean
+  isText: boolean
+  totalLines: number
+  status: UiThreadReviewChange['status'] | null
+}
+
+export type UiThreadReviewWindow = {
+  cwd: string
+  path: string
+  source: 'scope' | 'changes'
+  mode: 'file' | 'change'
+  startLine: number
+  lineCount: number
+  totalLines: number
+  lines: string[]
+}

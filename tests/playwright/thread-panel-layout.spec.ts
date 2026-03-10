@@ -160,6 +160,63 @@ test.beforeEach(async ({ page }) => {
     })
   })
 
+  await page.route('**/codex-api/thread-review/document**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.searchParams.get('path') || ''
+    const source = url.searchParams.get('source') === 'changes' ? 'changes' : 'scope'
+    const mode = source === 'changes' ? 'change' : 'file'
+    const isBinary = path.endsWith('photo.png')
+    const totalLines = isBinary ? 0 : path.endsWith('README.md') && source === 'changes' ? 4 : 1
+    const status = source === 'changes' ? 'modified' : null
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          cwd: '/srv/server-a/project-alpha',
+          path,
+          source,
+          mode,
+          repoRoot: '/srv/server-a/project-alpha',
+          branch: 'main',
+          isGitRepo: true,
+          isText: !isBinary,
+          totalLines,
+          status,
+        },
+      }),
+    })
+  })
+
+  await page.route('**/codex-api/thread-review/window**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.searchParams.get('path') || ''
+    const source = url.searchParams.get('source') === 'changes' ? 'changes' : 'scope'
+    const startLine = Number(url.searchParams.get('startLine') || '0')
+    const lineCount = Number(url.searchParams.get('lineCount') || '80')
+    const lines = path.endsWith('README.md') && source === 'changes'
+      ? ['@@ -1 +1,3 @@', '# hello', '', 'updated']
+      : path.endsWith('App.vue')
+        ? ['<template><main /></template>']
+        : []
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: {
+          cwd: '/srv/server-a/project-alpha',
+          path,
+          source,
+          mode: source === 'changes' ? 'change' : 'file',
+          startLine,
+          lineCount,
+          totalLines: lines.length,
+          lines: lines.slice(startLine, startLine + lineCount),
+        },
+      }),
+    })
+  })
+
   await page.route('**/codex-api/thread-review/changes**', async (route) => {
     await route.fulfill({
       status: 200,
@@ -302,7 +359,7 @@ test('desktop thread workspace shows independent Review, Scope, and Changes togg
   await expect(scopePanel.getByRole('button', { name: 'components', exact: true })).toBeVisible()
   await expect(scopePanel.getByRole('button', { name: 'App.vue', exact: true })).toBeVisible()
   await scopePanel.getByRole('button', { name: 'App.vue', exact: true }).click()
-  await expect(page.locator('.thread-review-path')).toContainText('App.vue')
+  await expect(page.getByText(/File: .*App\.vue/)).toBeVisible()
   const changePanel = page.getByLabel('Change navigator panel')
   await expect(changePanel.getByRole('button', { name: 'src', exact: true })).toBeVisible()
   await expect(changePanel.getByRole('button', { name: 'components', exact: true })).toHaveCount(0)
@@ -311,7 +368,7 @@ test('desktop thread workspace shows independent Review, Scope, and Changes togg
   await changePanel.getByRole('button', { name: 'components', exact: true }).click()
   await expect(changePanel.getByRole('button', { name: /App\.vue/i })).toBeVisible()
   await changePanel.getByRole('button', { name: /App\.vue/i }).click()
-  await expect(page.locator('.thread-review-path')).toContainText('App.vue')
+  await expect(page.getByText(/File: .*App\.vue/)).toBeVisible()
   await page.getByLabel('Review note').fill('Check this change in chat')
   await page.getByRole('button', { name: 'Attach review to chat' }).click()
   await expect(page.getByPlaceholder('Type a message... (@ for files, / for skills)')).toHaveValue(/Check this change in chat/)

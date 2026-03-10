@@ -40,7 +40,9 @@ import {
   SERVER_FS_TREE_METHOD,
   SERVER_PROJECT_ROOT_SUGGESTION_METHOD,
   SERVER_THREAD_REVIEW_CHANGES_METHOD,
+  SERVER_THREAD_REVIEW_DOCUMENT_METHOD,
   SERVER_THREAD_REVIEW_FILE_METHOD,
+  SERVER_THREAD_REVIEW_WINDOW_METHOD,
 } from '../shared/serverFsBridge.js'
 import {
   SERVER_REQUESTS_PENDING_METHOD,
@@ -3243,8 +3245,12 @@ function readConnectorBridgeFeatureLabel(method: string): string {
       return 'server-scoped file search'
     case SERVER_THREAD_REVIEW_CHANGES_METHOD:
       return 'thread review change discovery'
+    case SERVER_THREAD_REVIEW_DOCUMENT_METHOD:
+      return 'thread review document metadata'
     case SERVER_THREAD_REVIEW_FILE_METHOD:
       return 'thread review file inspection'
+    case SERVER_THREAD_REVIEW_WINDOW_METHOD:
+      return 'thread review line windows'
     case SERVER_REQUESTS_PENDING_METHOD:
       return 'hook approval requests'
     case SERVER_REQUESTS_RESPOND_METHOD:
@@ -5146,6 +5152,70 @@ export function createCodexBridgeMiddleware(options: CodexBridgeOptions = {}): C
               : message === 'cwd does not exist'
                 ? 404
                 : 500
+          setJson(res, statusCode, { error: message })
+          return
+        }
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/thread-review/document') {
+        try {
+          const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+          const data = await dispatchServerScopedBridgeMethod(
+            resolved,
+            SERVER_THREAD_REVIEW_DOCUMENT_METHOD,
+            {
+              cwd: url.searchParams.get('cwd')?.trim() ?? '',
+              path: url.searchParams.get('path')?.trim() ?? '',
+              source: url.searchParams.get('source')?.trim() ?? '',
+            },
+            relayHub,
+          )
+          setJson(res, 200, { data })
+          return
+        } catch (error) {
+          if (error instanceof BridgeHttpError) {
+            setJson(res, error.statusCode, { error: error.message })
+            return
+          }
+          const message = error instanceof Error ? error.message : 'Failed to inspect thread review document'
+          const statusCode = message === 'Missing cwd' || message === 'Missing path' || message === 'Path must stay inside cwd' || message === 'Path exists but is not a file'
+            ? 400
+            : message === 'Directory does not exist'
+              ? 404
+              : 500
+          setJson(res, statusCode, { error: message })
+          return
+        }
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/thread-review/window') {
+        try {
+          const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+          const data = await dispatchServerScopedBridgeMethod(
+            resolved,
+            SERVER_THREAD_REVIEW_WINDOW_METHOD,
+            {
+              cwd: url.searchParams.get('cwd')?.trim() ?? '',
+              path: url.searchParams.get('path')?.trim() ?? '',
+              source: url.searchParams.get('source')?.trim() ?? '',
+              startLine: Number(url.searchParams.get('startLine') ?? '0'),
+              lineCount: Number(url.searchParams.get('lineCount') ?? '80'),
+            },
+            relayHub,
+          )
+          setJson(res, 200, { data })
+          return
+        } catch (error) {
+          if (error instanceof BridgeHttpError) {
+            setJson(res, error.statusCode, { error: error.message })
+            return
+          }
+          const message = error instanceof Error ? error.message : 'Failed to inspect thread review window'
+          const statusCode = message === 'Missing cwd' || message === 'Missing path' || message === 'Path must stay inside cwd' || message === 'Path exists but is not a file'
+            ? 400
+            : message === 'Directory does not exist'
+              ? 404
+              : 500
           setJson(res, statusCode, { error: message })
           return
         }

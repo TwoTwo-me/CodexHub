@@ -21,7 +21,14 @@ import type {
 } from './appServerDtos'
 import { normalizeCodexApiError } from './codexErrors'
 import { normalizeThreadGroupsV2, normalizeThreadMessagesV2 } from './normalizers/v2'
-import type { UiMessage, UiProjectGroup, UiThreadReviewChanges, UiThreadReviewFilePayload } from '../types/codex'
+import type {
+  UiMessage,
+  UiProjectGroup,
+  UiThreadReviewChanges,
+  UiThreadReviewDocument,
+  UiThreadReviewFilePayload,
+  UiThreadReviewWindow,
+} from '../types/codex'
 import type { SkillSourceId } from '../shared/skillSources.js'
 
 type CurrentModelConfig = {
@@ -904,6 +911,48 @@ function normalizeThreadReviewFile(payload: unknown): UiThreadReviewFilePayload 
   }
 }
 
+function normalizeThreadReviewDocument(payload: unknown): UiThreadReviewDocument {
+  const record = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+  const source = record.source === 'changes' ? 'changes' : 'scope'
+  const mode = record.mode === 'change' ? 'change' : 'file'
+  const status = record.status
+  return {
+    cwd: typeof record.cwd === 'string' ? record.cwd.trim() : '',
+    path: typeof record.path === 'string' ? record.path.trim() : '',
+    source,
+    mode,
+    repoRoot: typeof record.repoRoot === 'string' && record.repoRoot.trim().length > 0 ? record.repoRoot.trim() : null,
+    branch: typeof record.branch === 'string' ? record.branch.trim() : '',
+    isGitRepo: record.isGitRepo === true,
+    isText: record.isText === true,
+    totalLines: typeof record.totalLines === 'number' && Number.isFinite(record.totalLines) ? record.totalLines : 0,
+    status: status === 'modified' || status === 'added' || status === 'deleted' || status === 'renamed' || status === 'copied' || status === 'untracked'
+      ? status
+      : null,
+  }
+}
+
+function normalizeThreadReviewWindow(payload: unknown): UiThreadReviewWindow {
+  const record = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+  const lines = Array.isArray(record.lines)
+    ? record.lines.filter((line): line is string => typeof line === 'string')
+    : []
+  return {
+    cwd: typeof record.cwd === 'string' ? record.cwd.trim() : '',
+    path: typeof record.path === 'string' ? record.path.trim() : '',
+    source: record.source === 'changes' ? 'changes' : 'scope',
+    mode: record.mode === 'change' ? 'change' : 'file',
+    startLine: typeof record.startLine === 'number' && Number.isFinite(record.startLine) ? record.startLine : 0,
+    lineCount: typeof record.lineCount === 'number' && Number.isFinite(record.lineCount) ? record.lineCount : lines.length,
+    totalLines: typeof record.totalLines === 'number' && Number.isFinite(record.totalLines) ? record.totalLines : lines.length,
+    lines,
+  }
+}
+
 export async function getThreadReviewChanges(cwd: string): Promise<UiThreadReviewChanges> {
   const params = new URLSearchParams({ cwd: cwd.trim() })
   const response = await fetch(buildServerScopedPath(`/codex-api/thread-review/changes?${params.toString()}`))
@@ -930,6 +979,50 @@ export async function getThreadReviewFile(cwd: string, path: string): Promise<Ui
     ? payload as Record<string, unknown>
     : {}
   return normalizeThreadReviewFile(envelope.data)
+}
+
+export async function getThreadReviewDocument(
+  cwd: string,
+  path: string,
+  source: 'scope' | 'changes',
+): Promise<UiThreadReviewDocument> {
+  const params = new URLSearchParams({ cwd: cwd.trim(), path: path.trim(), source })
+  const response = await fetch(buildServerScopedPath(`/codex-api/thread-review/document?${params.toString()}`))
+  const payload = await response.json() as unknown
+  if (!response.ok) {
+    const message = getErrorMessageFromPayload(payload, 'Failed to load thread review document')
+    throw new Error(message)
+  }
+  const envelope = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+  return normalizeThreadReviewDocument(envelope.data)
+}
+
+export async function getThreadReviewWindow(input: {
+  cwd: string
+  path: string
+  source: 'scope' | 'changes'
+  startLine: number
+  lineCount: number
+}): Promise<UiThreadReviewWindow> {
+  const params = new URLSearchParams({
+    cwd: input.cwd.trim(),
+    path: input.path.trim(),
+    source: input.source,
+    startLine: String(input.startLine),
+    lineCount: String(input.lineCount),
+  })
+  const response = await fetch(buildServerScopedPath(`/codex-api/thread-review/window?${params.toString()}`))
+  const payload = await response.json() as unknown
+  if (!response.ok) {
+    const message = getErrorMessageFromPayload(payload, 'Failed to load thread review window')
+    throw new Error(message)
+  }
+  const envelope = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+  return normalizeThreadReviewWindow(envelope.data)
 }
 
 function normalizeSkillsHubEntry(payload: unknown): SkillsHubEntry | null {
