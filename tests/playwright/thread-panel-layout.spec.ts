@@ -56,6 +56,37 @@ test.beforeEach(async ({ page }) => {
     })
   })
 
+  await page.route('**/codex-api/fs/tree**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.searchParams.get('path') || '/srv/server-a/project-alpha'
+    const data = path.endsWith('/src')
+      ? {
+          cwd: '/srv/server-a/project-alpha',
+          path: '/srv/server-a/project-alpha/src',
+          currentPath: '/srv/server-a/project-alpha/src',
+          parentPath: '/srv/server-a/project-alpha',
+          depth: 1,
+          entries: [
+            { path: '/srv/server-a/project-alpha/src/components', name: 'components', kind: 'directory', isText: false, hasChildren: true, depth: 2 },
+            { path: '/srv/server-a/project-alpha/src/App.vue', name: 'App.vue', kind: 'file', isText: true, hasChildren: false, depth: 2 },
+          ],
+        }
+      : {
+          cwd: '/srv/server-a/project-alpha',
+          path: '/srv/server-a/project-alpha',
+          currentPath: '/srv/server-a/project-alpha',
+          parentPath: null,
+          depth: 0,
+          entries: [
+            { path: '/srv/server-a/project-alpha/docs', name: 'docs', kind: 'directory', isText: false, hasChildren: true, depth: 1 },
+            { path: '/srv/server-a/project-alpha/src', name: 'src', kind: 'directory', isText: false, hasChildren: true, depth: 1 },
+            { path: '/srv/server-a/project-alpha/README.md', name: 'README.md', kind: 'file', isText: true, hasChildren: false, depth: 1 },
+            { path: '/srv/server-a/project-alpha/photo.png', name: 'photo.png', kind: 'file', isText: false, hasChildren: false, depth: 1 },
+          ],
+        }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) })
+  })
+
   await page.route('**/codex-api/thread-titles', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { titles: {}, order: [] } }) })
   })
@@ -151,9 +182,11 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/codex-api/thread-review/file**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.searchParams.get('path') ?? ''
-    const data = path === 'README.md'
-      ? { path: 'README.md', status: 'modified', diffText: '@@ -1 +1,3 @@\n-# hello\n+# hello\n+\n+updated\n', beforeText: '# hello\n', afterText: '# hello\n\nupdated\n' }
-      : { path: 'notes.txt', status: 'untracked', diffText: '@@ -0,0 +1 @@\n+pending review\n', beforeText: '', afterText: 'pending review\n' }
+    const data = path.endsWith('README.md')
+      ? { path, status: 'modified', diffText: '@@ -1 +1,3 @@\n-# hello\n+# hello\n+\n+updated\n', beforeText: '# hello\n', afterText: '# hello\n\nupdated\n' }
+      : path.endsWith('App.vue')
+        ? { path, status: 'modified', diffText: '@@ -1 +1 @@\n-<template></template>\n+<template><main /></template>\n', beforeText: '<template></template>\n', afterText: '<template><main /></template>\n' }
+        : { path: 'notes.txt', status: 'untracked', diffText: '@@ -0,0 +1 @@\n+pending review\n', beforeText: '', afterText: 'pending review\n' }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -259,9 +292,16 @@ test('desktop thread workspace shows independent Review, Scope, and Changes togg
   await expect(page.getByText('Server: Server A')).toBeVisible()
   await expect(page.getByText('Project: Project Alpha')).toBeVisible()
   await expect(page.getByText('CWD: /srv/server-a/project-alpha')).toBeVisible()
-  await page.getByPlaceholder('Search files in scope').fill('app')
+  await expect(page.getByRole('button', { name: 'docs', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'src', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'README.md', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'src/App.vue', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'photo.png', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'App.vue', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: 'src', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'components', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'App.vue', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'App.vue', exact: true }).click()
+  await expect(page.getByText(/App\.vue/)).toBeVisible()
   await expect(page.getByRole('button', { name: /README\.md modified/i })).toBeVisible()
   await page.getByRole('button', { name: /README\.md modified/i }).click()
   await expect(page.getByText('updated')).toBeVisible()
@@ -290,9 +330,10 @@ test('desktop thread workspace shows independent Review, Scope, and Changes togg
   await expect(page.getByText('Server: Server A')).toBeVisible()
   await expect(page.getByText('Project: Project Alpha')).toBeVisible()
   await expect(page.getByText('CWD: /srv/server-a/project-alpha')).toBeVisible()
-  await page.getByPlaceholder('Search files in scope').fill('app')
+  await expect(page.getByRole('button', { name: 'docs', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'src', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'README.md', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'src/App.vue', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'photo.png', exact: true })).toBeVisible()
 
   await page.waitForTimeout(1200)
   await page.screenshot({

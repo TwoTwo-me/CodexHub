@@ -6,24 +6,21 @@
       <p class="thread-scope-line"><strong>CWD:</strong> {{ cwd || 'Not available' }}</p>
     </div>
 
-    <label class="thread-scope-search-wrap">
-      <span class="thread-scope-search-label">Files</span>
-      <input
-        v-model="query"
-        class="thread-scope-search-input"
-        type="text"
-        placeholder="Search files in scope"
-      />
-    </label>
-
-    <p v-if="isLoading" class="thread-scope-status">Loading files…</p>
+    <p v-if="isLoadingRoot" class="thread-scope-status">Loading files…</p>
     <p v-else-if="errorMessage" class="thread-scope-status thread-scope-status-error">{{ errorMessage }}</p>
-    <p v-else-if="rows.length === 0" class="thread-scope-status">No files found for this scope.</p>
+    <p v-else-if="visibleRows.length === 0" class="thread-scope-status">No files found for this scope.</p>
 
     <ul v-else class="thread-scope-results">
-      <li v-for="row in rows" :key="row.path">
-        <button type="button" class="thread-scope-result" @click="$emit('select-file', row.path)">
-          {{ row.path }}
+      <li v-for="row in visibleRows" :key="row.path">
+        <button
+          type="button"
+          class="thread-scope-result"
+          :class="{ 'is-directory': row.kind === 'directory', 'is-binary': row.kind === 'file' && !row.isText }"
+          :style="{ paddingLeft: `${12 + row.depth * 16}px` }"
+          @click="void onRowClick(row)"
+        >
+          <span class="thread-scope-result-prefix" aria-hidden="true">{{ row.kind === 'directory' ? (isExpanded(row.path) ? '▾' : '▸') : row.isText ? '•' : '×' }}</span>
+          <span class="thread-scope-result-name">{{ row.name }}</span>
         </button>
       </li>
     </ul>
@@ -31,10 +28,10 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
-import { searchComposerFiles } from '../../api/codexGateway'
+import { computed, ref, watch } from 'vue'
+import { getFsTree, type FsTreeEntry, type FsTreeListing } from '../../api/codexGateway'
 
-defineEmits<{
+const emit = defineEmits<{
   'select-file': [path: string]
 }>()
 
@@ -44,61 +41,102 @@ const props = defineProps<{
   cwd: string
 }>()
 
-const query = ref('')
-const rows = ref<Array<{ path: string }>>([])
-const isLoading = ref(false)
+const listings = ref<Record<string, FsTreeListing>>({})
+const expanded = ref<Record<string, boolean>>({})
 const errorMessage = ref('')
-let searchToken = 0
-let searchTimer: ReturnType<typeof setTimeout> | null = null
+const isLoadingRoot = ref(false)
+let requestToken = 0
 
-function clearPendingSearch(): void {
-  if (!searchTimer) return
-  clearTimeout(searchTimer)
-  searchTimer = null
+const rootPath = computed(() => props.cwd.trim())
+
+function isExpanded(path: string): boolean {
+  return expanded.value[path] === true
 }
 
-async function runSearch(): Promise<void> {
-  const cwd = props.cwd.trim()
-  const token = ++searchToken
-  if (!cwd) {
-    rows.value = []
-    errorMessage.value = ''
-    isLoading.value = false
-    return
-  }
+function resetTree(): void {
+  listings.value = {}
+  expanded.value = {}
+  errorMessage.value = ''
+  isLoadingRoot.value = false
+}
 
-  isLoading.value = true
+async function loadTree(path: string): Promise<void> {
+  const cwd = rootPath.value
+  if (!cwd) return
+  const token = ++requestToken
+  const target = path.trim() || cwd
+  if (target === cwd) {
+    isLoadingRoot.value = true
+  }
   errorMessage.value = ''
   try {
-    const nextRows = await searchComposerFiles(cwd, query.value.trim(), 20)
-    if (token !== searchToken) return
-    rows.value = nextRows
+    const listing = await getFsTree(cwd, target)
+    if (token !== requestToken) return
+    listings.value = {
+      ...listings.value,
+      [listing.currentPath]: listing,
+    }
   } catch (error) {
-    if (token !== searchToken) return
-    rows.value = []
+    if (token !== requestToken) return
     errorMessage.value = error instanceof Error ? error.message : 'Failed to load scoped files.'
   } finally {
-    if (token === searchToken) {
-      isLoading.value = false
+    if (token === requestToken && target === cwd) {
+      isLoadingRoot.value = false
     }
   }
 }
 
+function buildVisibleRows(path: string): FsTreeEntry[] {
+  const listing = listings.value[path]
+  if (!listing) return []
+  const rows: FsTreeEntry[] = []
+  for (const entry of listing.entries) {
+    rows.push(entry)
+    if (entry.kind === 'directory' && isExpanded(entry.path)) {
+      rows.push(...buildVisibleRows(entry.path))
+    }
+  }
+  return rows
+}
+
+const visibleRows = computed(() => {
+  const cwd = rootPath.value
+  if (!cwd) return []
+  return buildVisibleRows(cwd)
+})
+
+async function onRowClick(row: FsTreeEntry): Promise<void> {
+  errorMessage.value = ''
+  if (row.kind === 'directory') {
+    const nextExpanded = !isExpanded(row.path)
+    expanded.value = {
+      ...expanded.value,
+      [row.path]: nextExpanded,
+    }
+    if (nextExpanded && !listings.value[row.path]) {
+      await loadTree(row.path)
+    }
+    return
+  }
+
+  if (!row.isText) {
+    errorMessage.value = 'Binary files are not opened in the review viewer.'
+    return
+  }
+
+  emit('select-file', row.path)
+}
+
 watch(
-  () => [props.cwd, query.value],
-  () => {
-    clearPendingSearch()
-    searchTimer = setTimeout(() => {
-      void runSearch()
-    }, 120)
+  () => props.cwd,
+  (nextCwd) => {
+    resetTree()
+    const cwd = nextCwd.trim()
+    if (!cwd) return
+    void loadTree(cwd)
   },
   { immediate: true },
 )
-
-onBeforeUnmount(() => {
-  clearPendingSearch()
-  searchToken += 1
-})
 </script>
 
 <style scoped>
@@ -120,18 +158,6 @@ onBeforeUnmount(() => {
   @apply mt-1;
 }
 
-.thread-scope-search-wrap {
-  @apply flex flex-col gap-1;
-}
-
-.thread-scope-search-label {
-  @apply text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500;
-}
-
-.thread-scope-search-input {
-  @apply rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 outline-none transition focus:border-zinc-500;
-}
-
 .thread-scope-status {
   @apply m-0 text-sm text-zinc-500;
 }
@@ -145,6 +171,22 @@ onBeforeUnmount(() => {
 }
 
 .thread-scope-result {
-  @apply w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-900;
+  @apply flex w-full items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm text-zinc-700 transition hover:bg-zinc-100 hover:text-zinc-900;
+}
+
+.thread-scope-result.is-directory {
+  @apply font-medium;
+}
+
+.thread-scope-result.is-binary {
+  @apply text-zinc-400;
+}
+
+.thread-scope-result-prefix {
+  @apply inline-flex w-4 shrink-0 items-center justify-center;
+}
+
+.thread-scope-result-name {
+  @apply min-w-0 truncate;
 }
 </style>

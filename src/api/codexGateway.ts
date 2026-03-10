@@ -654,6 +654,24 @@ export type FsDirectoryListing = {
   entries: FsDirectoryEntry[]
 }
 
+export type FsTreeEntry = {
+  name: string
+  path: string
+  kind: 'directory' | 'file'
+  isText: boolean
+  hasChildren: boolean
+  depth: number
+}
+
+export type FsTreeListing = {
+  cwd: string
+  path: string
+  currentPath: string
+  parentPath: string | null
+  depth: number
+  entries: FsTreeEntry[]
+}
+
 function normalizeFsDirectoryListing(payload: unknown): FsDirectoryListing {
   const data =
     payload && typeof payload === 'object' && !Array.isArray(payload)
@@ -680,6 +698,43 @@ function normalizeFsDirectoryListing(payload: unknown): FsDirectoryListing {
   }
 }
 
+function normalizeFsTreeListing(payload: unknown): FsTreeListing {
+  const data =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {}
+
+  const entriesRaw = Array.isArray(data.entries) ? data.entries : []
+  const entries: FsTreeEntry[] = []
+
+  for (const row of entriesRaw) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+    const record = row as Record<string, unknown>
+    const name = typeof record.name === 'string' ? record.name.trim() : ''
+    const path = typeof record.path === 'string' ? record.path.trim() : ''
+    const kind = record.kind === 'directory' || record.kind === 'file' ? record.kind : null
+    const depth = typeof record.depth === 'number' && Number.isFinite(record.depth) ? record.depth : 0
+    if (!name || !path || !kind) continue
+    entries.push({
+      name,
+      path,
+      kind,
+      isText: record.isText === true,
+      hasChildren: record.hasChildren === true,
+      depth,
+    })
+  }
+
+  return {
+    cwd: typeof data.cwd === 'string' ? data.cwd.trim() : '',
+    path: typeof data.path === 'string' ? data.path.trim() : '',
+    currentPath: typeof data.currentPath === 'string' ? data.currentPath.trim() : '',
+    parentPath: typeof data.parentPath === 'string' ? data.parentPath.trim() : null,
+    depth: typeof data.depth === 'number' && Number.isFinite(data.depth) ? data.depth : 0,
+    entries,
+  }
+}
+
 export async function getFsDirectoryList(path?: string): Promise<FsDirectoryListing> {
   const query = new URLSearchParams()
   const normalizedPath = path?.trim() ?? ''
@@ -702,6 +757,28 @@ export async function getFsDirectoryList(path?: string): Promise<FsDirectoryList
       : {}
 
   return normalizeFsDirectoryListing(envelope.data)
+}
+
+export async function getFsTree(cwd: string, path?: string): Promise<FsTreeListing> {
+  const params = new URLSearchParams({ cwd: cwd.trim() })
+  const normalizedPath = path?.trim() ?? ''
+  if (normalizedPath) {
+    params.set('path', normalizedPath)
+  }
+
+  const response = await fetch(buildServerScopedPath(`/codex-api/fs/tree?${params.toString()}`))
+  const payload = (await response.json()) as unknown
+  if (!response.ok) {
+    const message = getErrorMessageFromPayload(payload, 'Failed to load file tree')
+    throw new Error(message)
+  }
+
+  const envelope =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {}
+
+  return normalizeFsTreeListing(envelope.data)
 }
 
 export type ComposerFileSuggestion = {

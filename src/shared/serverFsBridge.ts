@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, extname, isAbsolute, join, relative, resolve } from 'node:path'
 
 export const SERVER_FS_LIST_METHOD = 'codexui/fs/list'
+export const SERVER_FS_TREE_METHOD = 'codexui/fs/tree'
 export const SERVER_PROJECT_ROOT_SUGGESTION_METHOD = 'codexui/project-root-suggestion'
 export const SERVER_COMPOSER_FILE_SEARCH_METHOD = 'codexui/composer-file-search'
 export const SERVER_THREAD_REVIEW_CHANGES_METHOD = 'codexui/thread-review/changes'
@@ -19,6 +20,24 @@ export type ServerFsDirectoryListing = {
   homePath: string
   parentPath: string | null
   entries: ServerFsDirectoryEntry[]
+}
+
+export type ServerFsTreeEntry = {
+  name: string
+  path: string
+  kind: 'directory' | 'file'
+  isText: boolean
+  hasChildren: boolean
+  depth: number
+}
+
+export type ServerFsTreeListing = {
+  cwd: string
+  path: string
+  currentPath: string
+  parentPath: string | null
+  depth: number
+  entries: ServerFsTreeEntry[]
 }
 
 export type ServerProjectRootSuggestion = {
@@ -65,6 +84,11 @@ type ServerFsListParams = {
   path?: string
 }
 
+type ServerFsTreeParams = {
+  cwd?: string
+  path?: string
+}
+
 type ServerProjectRootSuggestionParams = {
   basePath?: string
 }
@@ -88,6 +112,73 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null
+}
+
+const BINARY_FILE_EXTENSIONS = new Set([
+  '.7z',
+  '.a',
+  '.avif',
+  '.bin',
+  '.bmp',
+  '.class',
+  '.dll',
+  '.dylib',
+  '.eot',
+  '.exe',
+  '.gif',
+  '.gz',
+  '.ico',
+  '.jar',
+  '.jpeg',
+  '.jpg',
+  '.mov',
+  '.mp3',
+  '.mp4',
+  '.otf',
+  '.pdf',
+  '.png',
+  '.so',
+  '.tar',
+  '.tgz',
+  '.ttf',
+  '.wav',
+  '.webm',
+  '.webp',
+  '.woff',
+  '.woff2',
+  '.zip',
+])
+
+function normalizeFsTreePath(cwd: string, input: string): string {
+  const root = isAbsolute(cwd) ? cwd : resolve(cwd)
+  const value = input.trim()
+  const target = value ? (isAbsolute(value) ? value : resolve(root, value)) : root
+  const relativePath = relative(root, target)
+  if (relativePath.startsWith('..')) {
+    throw new Error('Path must stay inside cwd')
+  }
+  return target
+}
+
+function readTreeDepth(root: string, currentPath: string): number {
+  const relativePath = relative(root, currentPath)
+  if (!relativePath) return 0
+  return relativePath.split(/[\\/]+/u).filter(Boolean).length
+}
+
+function isLikelyTextFile(path: string): boolean {
+  const extension = extname(path).toLowerCase()
+  if (!extension) return true
+  return !BINARY_FILE_EXTENSIONS.has(extension)
+}
+
+async function directoryHasChildren(path: string): Promise<boolean> {
+  try {
+    const entries = await readdir(path, { withFileTypes: true })
+    return entries.length > 0
+  } catch {
+    return false
+  }
 }
 
 function scoreFileCandidate(path: string, query: string): number {
@@ -317,6 +408,7 @@ async function readReviewFile(params: unknown): Promise<ServerThreadReviewFilePa
 
 export function isServerFsBridgeMethod(method: string): boolean {
   return method === SERVER_FS_LIST_METHOD
+    || method === SERVER_FS_TREE_METHOD
     || method === SERVER_PROJECT_ROOT_SUGGESTION_METHOD
     || method === SERVER_COMPOSER_FILE_SEARCH_METHOD
     || method === SERVER_THREAD_REVIEW_CHANGES_METHOD
@@ -326,6 +418,9 @@ export function isServerFsBridgeMethod(method: string): boolean {
 export async function executeServerFsBridgeMethod(method: string, params: unknown): Promise<unknown> {
   if (method === SERVER_FS_LIST_METHOD) {
     return await listServerDirectories(params)
+  }
+  if (method === SERVER_FS_TREE_METHOD) {
+    return await listServerTree(params)
   }
   if (method === SERVER_PROJECT_ROOT_SUGGESTION_METHOD) {
     return await suggestServerProjectRoot(params)
@@ -379,6 +474,66 @@ export async function listServerDirectories(params: unknown): Promise<ServerFsDi
     }
   } catch {
     throw new Error('Failed to read directory')
+  }
+}
+
+export async function listServerTree(params: unknown): Promise<ServerFsTreeListing> {
+  const payload = asRecord(params) as ServerFsTreeParams | null
+  const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
+  if (!rawCwd) {
+    throw new Error('Missing cwd')
+  }
+
+  const cwd = isAbsolute(rawCwd) ? rawCwd : resolve(rawCwd)
+  const currentPath = normalizeFsTreePath(cwd, typeof payload?.path === 'string' ? payload.path : '')
+
+  try {
+    const info = await stat(currentPath)
+    if (!info.isDirectory()) {
+      throw new Error('Path exists but is not a directory')
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Path exists but is not a directory') {
+      throw error
+    }
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    if (code === 'ENOENT') {
+      throw new Error('Directory does not exist')
+    }
+    throw new Error('Failed to access directory')
+  }
+
+  const depth = readTreeDepth(cwd, currentPath)
+  const parentCandidate = dirname(currentPath)
+  const parentPath = currentPath === cwd ? null : normalizeFsTreePath(cwd, parentCandidate)
+  const entries = await readdir(currentPath, { withFileTypes: true })
+  const rows = await Promise.all(entries.map(async (entry) => {
+    const path = join(currentPath, entry.name)
+    const isDirectory = entry.isDirectory()
+    return {
+      name: entry.name,
+      path,
+      kind: isDirectory ? 'directory' : 'file',
+      isText: isDirectory ? false : isLikelyTextFile(path),
+      hasChildren: isDirectory ? await directoryHasChildren(path) : false,
+      depth: depth + 1,
+    } satisfies ServerFsTreeEntry
+  }))
+
+  rows.sort((left, right) => {
+    if (left.kind !== right.kind) {
+      return left.kind === 'directory' ? -1 : 1
+    }
+    return left.name.localeCompare(right.name)
+  })
+
+  return {
+    cwd,
+    path: currentPath,
+    currentPath,
+    parentPath,
+    depth,
+    entries: rows,
   }
 }
 

@@ -37,6 +37,7 @@ import {
   executeServerFsBridgeMethod,
   SERVER_COMPOSER_FILE_SEARCH_METHOD,
   SERVER_FS_LIST_METHOD,
+  SERVER_FS_TREE_METHOD,
   SERVER_PROJECT_ROOT_SUGGESTION_METHOD,
   SERVER_THREAD_REVIEW_CHANGES_METHOD,
   SERVER_THREAD_REVIEW_FILE_METHOD,
@@ -3234,6 +3235,8 @@ function readConnectorBridgeFeatureLabel(method: string): string {
   switch (method) {
     case SERVER_FS_LIST_METHOD:
       return 'server-scoped folder browsing'
+    case SERVER_FS_TREE_METHOD:
+      return 'server-scoped file tree browsing'
     case SERVER_PROJECT_ROOT_SUGGESTION_METHOD:
       return 'server-scoped project suggestions'
     case SERVER_COMPOSER_FILE_SEARCH_METHOD:
@@ -4983,6 +4986,38 @@ export function createCodexBridgeMiddleware(options: CodexBridgeOptions = {}): C
             : message === 'Path exists but is not a directory'
               ? 400
               : 500
+          setJson(res, statusCode, { error: message })
+          return
+        }
+      }
+
+      if (req.method === 'GET' && url.pathname === '/codex-api/fs/tree') {
+        try {
+          const resolved = await resolveServerRuntime(req, url, runtimeRegistry)
+          const data = await dispatchServerScopedBridgeMethod(
+            resolved,
+            SERVER_FS_TREE_METHOD,
+            {
+              cwd: url.searchParams.get('cwd')?.trim() ?? '',
+              path: url.searchParams.get('path')?.trim() ?? '',
+            },
+            relayHub,
+          )
+          setJson(res, 200, { data })
+          return
+        } catch (error) {
+          if (error instanceof BridgeHttpError) {
+            setJson(res, error.statusCode, { error: error.message })
+            return
+          }
+          const message = error instanceof Error ? error.message : 'Failed to load file tree'
+          const statusCode = message === 'Missing cwd'
+            ? 400
+            : message === 'Path must stay inside cwd' || message === 'Path exists but is not a directory'
+              ? 400
+              : message === 'Directory does not exist'
+                ? 404
+                : 500
           setJson(res, statusCode, { error: message })
           return
         }
