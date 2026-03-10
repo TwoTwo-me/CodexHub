@@ -265,7 +265,7 @@
                     @rollback="onRollback" />
                 </div>
 
-                <div v-if="!isMobile && !isThreadReviewOpen" class="composer-with-queue">
+                <div v-if="!isMobile" class="composer-with-queue">
                   <QueuedMessages
                     :messages="selectedThreadQueuedMessages"
                     @steer="steerQueuedMessage"
@@ -301,56 +301,27 @@
                 title="Review to chat"
                 description="Review queue, approvals, and upcoming chat context before sending."
               >
-                <div class="thread-review-workbench">
-                  <div class="thread-review-browser">
-                    <p v-if="reviewChangesLoading && !selectedReviewFile" class="thread-review-status">Loading review…</p>
-                    <p v-else-if="reviewErrorMessage" class="thread-review-status thread-review-status-error">{{ reviewErrorMessage }}</p>
-                    <p v-else-if="!reviewIsGitRepo" class="thread-review-status">This thread cwd is not a Git repo yet.</p>
-                    <p v-else-if="!selectedReviewFile" class="thread-review-status">Select a changed file to review it before sending.</p>
-                    <template v-else>
-                      <p class="thread-panel-eyebrow">Selected file</p>
-                      <p class="thread-review-path">{{ selectedReviewFile.path }}</p>
-                      <p v-if="reviewBranch" class="thread-review-branch">Branch {{ reviewBranch }}</p>
-                      <pre class="thread-review-diff">{{ reviewPreviewText }}</pre>
-                      <label class="thread-review-note-field">
-                        <span class="thread-review-note-label">Review note</span>
-                        <textarea
-                          v-model="reviewNoteDraft"
-                          class="thread-review-note-input"
-                          aria-label="Review note"
-                          rows="3"
-                        />
-                      </label>
-                      <button type="button" class="thread-review-attach" @click="onAttachReviewToChat">Attach review to chat</button>
-                    </template>
-                  </div>
-
-                  <QueuedMessages
-                    :messages="selectedThreadQueuedMessages"
-                    @steer="steerQueuedMessage"
-                    @delete="removeQueuedMessage"
-                  />
-                  <ThreadRequestRail
-                    :pending-requests="selectedThreadServerRequests"
-                    :has-queue-above="selectedThreadQueuedMessages.length > 0"
-                    @respond-server-request="onRespondServerRequest"
-                  />
-                  <ThreadComposer
-                    ref="composerRef"
-                    :active-thread-id="composerThreadContextId"
-                    :cwd="composerCwd"
-                    :models="availableModelIds"
-                    :selected-model="selectedModelId"
-                    :selected-reasoning-effort="selectedReasoningEffort"
-                    :skills="installedSkills"
-                    :is-turn-in-progress="isSelectedThreadInProgress"
-                    :is-interrupting-turn="isInterruptingTurn"
-                    :has-queue-above="selectedThreadQueuedMessages.length > 0 || selectedThreadServerRequests.length > 0"
-                    @submit="onSubmitThreadMessage"
-                    @update:selected-model="onSelectModel"
-                    @update:selected-reasoning-effort="onSelectReasoningEffort"
-                    @interrupt="onInterruptTurn"
-                  />
+                <div class="thread-review-browser">
+                  <p v-if="reviewChangesLoading && !selectedReviewFile" class="thread-review-status">Loading review…</p>
+                  <p v-else-if="reviewErrorMessage" class="thread-review-status thread-review-status-error">{{ reviewErrorMessage }}</p>
+                  <p v-else-if="!reviewIsGitRepo" class="thread-review-status">This thread cwd is not a Git repo yet.</p>
+                  <p v-else-if="!selectedReviewFile" class="thread-review-status">Select a changed file to review it before sending.</p>
+                  <template v-else>
+                    <p class="thread-panel-eyebrow">Selected file</p>
+                    <p class="thread-review-path">{{ selectedReviewFile.path }}</p>
+                    <p v-if="reviewBranch" class="thread-review-branch">Branch {{ reviewBranch }}</p>
+                    <pre class="thread-review-diff">{{ reviewPreviewText }}</pre>
+                    <label class="thread-review-note-field">
+                      <span class="thread-review-note-label">Review note</span>
+                      <textarea
+                        v-model="reviewNoteDraft"
+                        class="thread-review-note-input"
+                        aria-label="Review note"
+                        rows="3"
+                      />
+                    </label>
+                    <button type="button" class="thread-review-attach" @click="onAttachReviewToChat">Attach review to chat</button>
+                  </template>
                 </div>
               </ThreadReviewPanel>
 

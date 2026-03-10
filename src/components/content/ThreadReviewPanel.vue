@@ -47,6 +47,6 @@ const panelStyle = computed(() => ({
 }
 
 .thread-review-panel-body {
-  @apply flex-1 min-h-0 flex flex-col justify-end gap-0 bg-zinc-50/70 pt-3;
+  @apply flex-1 min-h-0 flex flex-col justify-start gap-0 bg-zinc-50/70 pt-3;
 }
 </style>

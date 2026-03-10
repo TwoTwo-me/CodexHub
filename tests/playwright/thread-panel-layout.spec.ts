@@ -252,6 +252,8 @@ test('desktop thread workspace shows independent Review, Scope, and Changes togg
   await expect(page.getByRole('button', { name: 'Scope', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Changes', exact: true })).toBeVisible()
   await expect(page.getByText('Review to chat', { exact: true }).first()).toBeVisible()
+  await expect(page.locator('.thread-workspace-chat .thread-composer')).toBeVisible()
+  await expect(page.locator('.thread-review-panel .thread-composer')).toHaveCount(0)
   await expect(page.getByText('Scope browser').first()).toBeVisible()
   await expect(page.getByText('Change navigator').first()).toBeVisible()
   await expect(page.getByText('Server: Server A')).toBeVisible()
