@@ -3,7 +3,7 @@
     <header class="thread-review-panel-header">
       <div>
         <p class="thread-review-panel-eyebrow">{{ title }}</p>
-        <p class="thread-review-panel-description">{{ description }}</p>
+        <p v-if="description" class="thread-review-panel-description">{{ description }}</p>
       </div>
     </header>
     <div class="thread-review-panel-body">
@@ -18,7 +18,7 @@ import { computed } from 'vue'
 const props = defineProps<{
   width: number
   title: string
-  description: string
+  description?: string
 }>()
 
 const panelStyle = computed(() => ({

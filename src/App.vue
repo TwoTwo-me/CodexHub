@@ -313,8 +313,13 @@
                 v-if="!isMobile && isThreadReviewOpen"
                 :width="threadReviewWidth"
                 title="Review to chat"
-                description="Review queue, approvals, and upcoming chat context before sending."
               >
+                <ThreadReviewTabs
+                  :tabs="reviewTabs"
+                  :active-key="activeReviewTabKey"
+                  @select="(key) => { activeReviewTabKey = key }"
+                  @close="closeReviewTab"
+                />
                 <ThreadReviewViewer
                   :cwd="composerCwd"
                   :path="selectedReviewPath"
@@ -393,6 +398,7 @@ import ThreadRequestRail from './components/content/ThreadRequestRail.vue'
 import ThreadPanelToggles from './components/content/ThreadPanelToggles.vue'
 import ThreadReviewPanel from './components/content/ThreadReviewPanel.vue'
 import ThreadReviewViewer from './components/content/ThreadReviewViewer.vue'
+import ThreadReviewTabs from './components/content/ThreadReviewTabs.vue'
 import ThreadUtilityPanel from './components/content/ThreadUtilityPanel.vue'
 import ThreadScopePanel from './components/content/ThreadScopePanel.vue'
 import ThreadChangesPanel from './components/content/ThreadChangesPanel.vue'
@@ -494,8 +500,8 @@ const reviewChanges = ref<UiThreadReviewChange[]>([])
 const reviewIsGitRepo = ref(false)
 const reviewErrorMessage = ref('')
 const reviewChangesLoading = ref(false)
-const selectedReviewPath = ref('')
-const selectedReviewSource = ref<'scope' | 'changes'>('changes')
+const reviewTabs = ref<Array<{ key: string; path: string; source: 'scope' | 'changes' }>>([])
+const activeReviewTabKey = ref('')
 let reviewChangesToken = 0
 const isRouteSyncInProgress = ref(false)
 const hasInitialized = ref(false)
@@ -594,6 +600,9 @@ const composerCwd = computed(() => {
   return selectedThread.value?.cwd?.trim() ?? ''
 })
 const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selectedThread.value?.inProgress === true)
+const activeReviewTab = computed(() => reviewTabs.value.find((tab) => tab.key === activeReviewTabKey.value) ?? reviewTabs.value[0] ?? null)
+const selectedReviewPath = computed(() => activeReviewTab.value?.path ?? '')
+const selectedReviewSource = computed<'scope' | 'changes'>(() => activeReviewTab.value?.source ?? 'changes')
 const threadServerIdById = computed(() => {
   const next = new Map<string, string>()
   for (const [serverKey, groups] of Object.entries(sidebarGroupsByServerId.value)) {
@@ -611,8 +620,23 @@ function clearThreadReviewState(): void {
   reviewIsGitRepo.value = false
   reviewErrorMessage.value = ''
   reviewChangesLoading.value = false
-  selectedReviewPath.value = ''
-  selectedReviewSource.value = 'changes'
+  clearReviewTabs()
+}
+
+function reviewTabKey(path: string, source: 'scope' | 'changes'): string {
+  return `${source}:${path}`
+}
+
+function clearReviewTabs(): void {
+  reviewTabs.value = []
+  activeReviewTabKey.value = ''
+}
+
+function closeReviewTab(tabKey: string): void {
+  const nextTabs = reviewTabs.value.filter((tab) => tab.key !== tabKey)
+  reviewTabs.value = nextTabs
+  if (activeReviewTabKey.value !== tabKey) return
+  activeReviewTabKey.value = nextTabs.at(-1)?.key ?? ''
 }
 
 async function refreshThreadReview(): Promise<void> {
@@ -631,21 +655,15 @@ async function refreshThreadReview(): Promise<void> {
     if (token !== reviewChangesToken) return
     reviewChanges.value = payload.files
     reviewIsGitRepo.value = payload.isGitRepo
-    const nextPath = payload.files.some((file) => file.path === selectedReviewPath.value)
-      ? selectedReviewPath.value
-      : payload.files[0]?.path ?? ''
-    if (!nextPath) {
-      selectedReviewPath.value = ''
-      return
+    const currentPath = selectedReviewPath.value
+    if (currentPath && !payload.files.some((file) => file.path === currentPath)) {
+      closeReviewTab(reviewTabKey(currentPath, selectedReviewSource.value))
     }
-    selectedReviewPath.value = nextPath
-    selectedReviewSource.value = 'changes'
   } catch (error) {
     if (token !== reviewChangesToken) return
     reviewChanges.value = []
     reviewIsGitRepo.value = false
-    selectedReviewPath.value = ''
-    selectedReviewSource.value = 'changes'
+    clearReviewTabs()
     reviewErrorMessage.value = error instanceof Error ? error.message : 'Failed to load review changes.'
   } finally {
     if (token === reviewChangesToken) {
@@ -658,8 +676,13 @@ function onSelectReviewFile(path: string, source: 'scope' | 'changes'): void {
   if (!isThreadReviewOpen.value) {
     toggleThreadReview()
   }
-  selectedReviewPath.value = path
-  selectedReviewSource.value = source
+  const normalizedPath = path.trim()
+  if (!normalizedPath) return
+  const key = reviewTabKey(normalizedPath, source)
+  if (!reviewTabs.value.some((tab) => tab.key === key)) {
+    reviewTabs.value = [...reviewTabs.value, { key, path: normalizedPath, source }]
+  }
+  activeReviewTabKey.value = key
 }
 
 function onSyncReviewComments(payload: { path: string; comments: Array<{ path: string; line: number; text: string }> }): void {
@@ -671,6 +694,16 @@ function onSyncReviewComments(payload: { path: string; comments: Array<{ path: s
 watch([isThreadRoute, composerCwd, selectedServerId], () => {
   void refreshThreadReview()
 }, { immediate: true })
+
+watch(
+  () => [selectedThreadId.value, selectedServerId.value, composerCwd.value] as const,
+  (next, previous) => {
+    if (!previous) return
+    if (next[0] !== previous[0] || next[1] !== previous[1] || next[2] !== previous[2]) {
+      clearReviewTabs()
+    }
+  },
+)
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeyDown)
   void initialize()
