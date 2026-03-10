@@ -5167,6 +5167,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeOptions = {}): C
               cwd: url.searchParams.get('cwd')?.trim() ?? '',
               path: url.searchParams.get('path')?.trim() ?? '',
               source: url.searchParams.get('source')?.trim() ?? '',
+              allowBinaryRaw: url.searchParams.get('allowBinaryRaw') === '1',
             },
             relayHub,
           )
@@ -5200,6 +5201,7 @@ export function createCodexBridgeMiddleware(options: CodexBridgeOptions = {}): C
               source: url.searchParams.get('source')?.trim() ?? '',
               startLine: Number(url.searchParams.get('startLine') ?? '0'),
               lineCount: Number(url.searchParams.get('lineCount') ?? '80'),
+              allowBinaryRaw: url.searchParams.get('allowBinaryRaw') === '1',
             },
             relayHub,
           )

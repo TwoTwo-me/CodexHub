@@ -985,8 +985,12 @@ export async function getThreadReviewDocument(
   cwd: string,
   path: string,
   source: 'scope' | 'changes',
+  options: { allowBinaryRaw?: boolean } = {},
 ): Promise<UiThreadReviewDocument> {
   const params = new URLSearchParams({ cwd: cwd.trim(), path: path.trim(), source })
+  if (options.allowBinaryRaw === true) {
+    params.set('allowBinaryRaw', '1')
+  }
   const response = await fetch(buildServerScopedPath(`/codex-api/thread-review/document?${params.toString()}`))
   const payload = await response.json() as unknown
   if (!response.ok) {
@@ -1005,6 +1009,7 @@ export async function getThreadReviewWindow(input: {
   source: 'scope' | 'changes'
   startLine: number
   lineCount: number
+  allowBinaryRaw?: boolean
 }): Promise<UiThreadReviewWindow> {
   const params = new URLSearchParams({
     cwd: input.cwd.trim(),
@@ -1013,6 +1018,9 @@ export async function getThreadReviewWindow(input: {
     startLine: String(input.startLine),
     lineCount: String(input.lineCount),
   })
+  if (input.allowBinaryRaw === true) {
+    params.set('allowBinaryRaw', '1')
+  }
   const response = await fetch(buildServerScopedPath(`/codex-api/thread-review/window?${params.toString()}`))
   const payload = await response.json() as unknown
   if (!response.ok) {

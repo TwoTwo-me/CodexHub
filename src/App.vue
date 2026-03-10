@@ -313,6 +313,7 @@
                 v-if="!isMobile && isThreadReviewOpen"
                 :width="threadReviewWidth"
                 title="Review to chat"
+                @resize-start="onBeginReviewResize"
               >
                 <ThreadReviewTabs
                   :tabs="reviewTabs"
@@ -324,7 +325,9 @@
                   :cwd="composerCwd"
                   :path="selectedReviewPath"
                   :source="selectedReviewSource"
+                  :allow-binary-raw="selectedReviewAllowBinaryRaw"
                   @sync-review-comments="onSyncReviewComments"
+                  @open-binary-raw="onOpenReviewBinaryRaw"
                 />
               </ThreadReviewPanel>
 
@@ -333,8 +336,11 @@
                 :width="threadUtilityWidth"
                 :scope-open="isThreadScopeOpen"
                 :changes-open="isThreadChangesOpen"
+                :split-ratio="threadUtilitySplit"
                 @refresh-scope="scopeRefreshToken += 1"
                 @refresh-changes="void refreshThreadReview()"
+                @resize-start="onBeginUtilityResize"
+                @split-resize-start="onBeginUtilitySplitResize"
               >
                 <template #scope>
                   <ThreadScopePanel
@@ -490,9 +496,13 @@ const {
   utilityOpen: isThreadUtilityOpen,
   reviewWidth: threadReviewWidth,
   utilityWidth: threadUtilityWidth,
+  utilitySplit: threadUtilitySplit,
   toggleReview: toggleThreadReview,
   toggleScope: toggleThreadScope,
   toggleChanges: toggleThreadChanges,
+  setReviewWidth,
+  setUtilityWidth,
+  setUtilitySplit,
 } = useThreadPanels()
 const composerRef = ref<{
   setReviewComments: (path: string, comments: Array<{ path: string; line: number; text: string }>) => void
@@ -501,7 +511,7 @@ const reviewChanges = ref<UiThreadReviewChange[]>([])
 const reviewIsGitRepo = ref(false)
 const reviewErrorMessage = ref('')
 const reviewChangesLoading = ref(false)
-const reviewTabs = ref<Array<{ key: string; path: string; source: 'scope' | 'changes' }>>([])
+const reviewTabs = ref<Array<{ key: string; path: string; source: 'scope' | 'changes'; allowBinaryRaw?: boolean }>>([])
 const activeReviewTabKey = ref('')
 const scopeRefreshToken = ref(0)
 let reviewChangesToken = 0
@@ -605,6 +615,7 @@ const isSelectedThreadInProgress = computed(() => !isHomeRoute.value && selected
 const activeReviewTab = computed(() => reviewTabs.value.find((tab) => tab.key === activeReviewTabKey.value) ?? reviewTabs.value[0] ?? null)
 const selectedReviewPath = computed(() => activeReviewTab.value?.path ?? '')
 const selectedReviewSource = computed<'scope' | 'changes'>(() => activeReviewTab.value?.source ?? 'changes')
+const selectedReviewAllowBinaryRaw = computed(() => activeReviewTab.value?.allowBinaryRaw === true)
 const threadServerIdById = computed(() => {
   const next = new Map<string, string>()
   for (const [serverKey, groups] of Object.entries(sidebarGroupsByServerId.value)) {
@@ -641,6 +652,10 @@ function closeReviewTab(tabKey: string): void {
   activeReviewTabKey.value = nextTabs.at(-1)?.key ?? ''
 }
 
+function updateReviewTab(tabKey: string, updater: (tab: { key: string; path: string; source: 'scope' | 'changes'; allowBinaryRaw?: boolean }) => { key: string; path: string; source: 'scope' | 'changes'; allowBinaryRaw?: boolean }): void {
+  reviewTabs.value = reviewTabs.value.map((tab) => tab.key === tabKey ? updater(tab) : tab)
+}
+
 async function refreshThreadReview(): Promise<void> {
   const cwd = composerCwd.value.trim()
   if (!isThreadRoute.value || !cwd) {
@@ -674,17 +689,29 @@ async function refreshThreadReview(): Promise<void> {
   }
 }
 
-function onSelectReviewFile(path: string, source: 'scope' | 'changes'): void {
+function onSelectReviewFile(
+  payload: string | { path: string; allowBinaryRaw?: boolean },
+  source: 'scope' | 'changes',
+): void {
   if (!isThreadReviewOpen.value) {
     toggleThreadReview()
   }
-  const normalizedPath = path.trim()
+  const normalizedPath = typeof payload === 'string' ? payload.trim() : payload.path.trim()
   if (!normalizedPath) return
   const key = reviewTabKey(normalizedPath, source)
+  const allowBinaryRaw = typeof payload === 'string' ? false : payload.allowBinaryRaw === true
   if (!reviewTabs.value.some((tab) => tab.key === key)) {
-    reviewTabs.value = [...reviewTabs.value, { key, path: normalizedPath, source }]
+    reviewTabs.value = [...reviewTabs.value, { key, path: normalizedPath, source, ...(allowBinaryRaw ? { allowBinaryRaw: true } : {}) }]
+  } else if (allowBinaryRaw) {
+    updateReviewTab(key, (tab) => ({ ...tab, allowBinaryRaw: true }))
   }
   activeReviewTabKey.value = key
+}
+
+function onOpenReviewBinaryRaw(): void {
+  const activeTab = activeReviewTab.value
+  if (!activeTab) return
+  updateReviewTab(activeTab.key, (tab) => ({ ...tab, allowBinaryRaw: true }))
 }
 
 function onSyncReviewComments(payload: { path: string; comments: Array<{ path: string; line: number; text: string }> }): void {
@@ -706,6 +733,49 @@ watch(
     }
   },
 )
+
+function beginHorizontalResize(
+  event: MouseEvent,
+  startWidth: number,
+  applyWidth: (value: number) => void,
+): void {
+  event.preventDefault()
+  const originX = event.clientX
+  const onMouseMove = (moveEvent: MouseEvent) => {
+    applyWidth(startWidth - (moveEvent.clientX - originX))
+  }
+  const onMouseUp = () => {
+    window.removeEventListener('mousemove', onMouseMove)
+    window.removeEventListener('mouseup', onMouseUp)
+  }
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', onMouseUp)
+}
+
+function onBeginReviewResize(event: MouseEvent): void {
+  beginHorizontalResize(event, threadReviewWidth.value, setReviewWidth)
+}
+
+function onBeginUtilityResize(event: MouseEvent): void {
+  beginHorizontalResize(event, threadUtilityWidth.value, setUtilityWidth)
+}
+
+function onBeginUtilitySplitResize(event: MouseEvent): void {
+  event.preventDefault()
+  const utilityPanel = (event.currentTarget as HTMLElement | null)?.closest('.thread-utility-panel') as HTMLElement | null
+  if (!utilityPanel) return
+  const rect = utilityPanel.getBoundingClientRect()
+  const onMouseMove = (moveEvent: MouseEvent) => {
+    const ratio = (moveEvent.clientY - rect.top) / Math.max(rect.height, 1)
+    setUtilitySplit(ratio)
+  }
+  const onMouseUp = () => {
+    window.removeEventListener('mousemove', onMouseMove)
+    window.removeEventListener('mouseup', onMouseUp)
+  }
+  window.addEventListener('mousemove', onMouseMove)
+  window.addEventListener('mouseup', onMouseUp)
+}
 onMounted(() => {
   window.addEventListener('keydown', onWindowKeyDown)
   void initialize()

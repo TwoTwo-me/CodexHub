@@ -26,7 +26,7 @@ import { computed, ref, watch } from 'vue'
 import { getFsTree, type FsTreeEntry, type FsTreeListing } from '../../api/codexGateway'
 
 const emit = defineEmits<{
-  'select-file': [path: string]
+  'select-file': [payload: { path: string; allowBinaryRaw?: boolean }]
 }>()
 
 const props = defineProps<{
@@ -119,7 +119,10 @@ async function onRowClick(row: FsTreeEntry): Promise<void> {
     if (!confirmed) return
   }
 
-  emit('select-file', row.path)
+  emit('select-file', {
+    path: row.path,
+    ...(row.isText ? {} : { allowBinaryRaw: true }),
+  })
 }
 
 watch(

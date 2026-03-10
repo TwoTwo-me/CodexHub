@@ -4,7 +4,12 @@
     <p v-else-if="errorMessage" class="thread-review-status thread-review-status-error">{{ errorMessage }}</p>
     <p v-else-if="!path.trim()" class="thread-review-status">Select a file to review it here.</p>
     <p v-else-if="!document" class="thread-review-status">No review content is available for this selection.</p>
-    <p v-else-if="!document.isText" class="thread-review-status">Binary files are not opened in the review viewer.</p>
+    <div v-else-if="!document.isText" class="thread-review-status thread-review-status-binary">
+      <p class="thread-review-status">Binary files are not opened in the review viewer.</p>
+      <button type="button" class="thread-review-binary-open" @click="$emit('open-binary-raw')">
+        Open raw binary anyway
+      </button>
+    </div>
     <template v-else>
       <div class="thread-review-meta">
         <p class="thread-review-meta-line"><strong>File:</strong> {{ promptPath }}</p>
@@ -96,10 +101,12 @@ const props = defineProps<{
   cwd: string
   path: string
   source: 'scope' | 'changes'
+  allowBinaryRaw?: boolean
 }>()
 
 const emit = defineEmits<{
   'sync-review-comments': [payload: { path: string; comments: Array<{ path: string; line: number; text: string }> }]
+  'open-binary-raw': []
 }>()
 
 const scrollerRef = ref<HTMLDivElement | null>(null)
@@ -171,6 +178,7 @@ async function loadWindow(startLine: number, lineCount: number): Promise<void> {
     source: props.source,
     startLine,
     lineCount,
+    allowBinaryRaw: props.allowBinaryRaw,
   })
   if (token !== windowToken) return
   windowState.value = nextWindow
@@ -194,7 +202,9 @@ async function loadDocument(): Promise<void> {
   isLoadingDocument.value = true
   errorMessage.value = ''
   try {
-    const nextDocument = await getThreadReviewDocument(cwd, path, props.source)
+    const nextDocument = await getThreadReviewDocument(cwd, path, props.source, {
+      allowBinaryRaw: props.allowBinaryRaw,
+    })
     if (token !== documentToken) return
     document.value = nextDocument
     if (!nextDocument.isText) {
@@ -293,7 +303,7 @@ function emitCurrentPathComments(): void {
 }
 
 watch(
-  () => [props.cwd, props.path, props.source],
+  () => [props.cwd, props.path, props.source, props.allowBinaryRaw],
   () => {
     void loadDocument()
   },
@@ -314,6 +324,14 @@ watch(
 
 .thread-review-status-error {
   @apply text-rose-600;
+}
+
+.thread-review-status-binary {
+  @apply flex flex-col items-start gap-2;
+}
+
+.thread-review-binary-open {
+  @apply rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100;
 }
 
 .thread-review-meta {

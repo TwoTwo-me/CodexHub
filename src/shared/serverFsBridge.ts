@@ -138,6 +138,7 @@ type ServerThreadReviewDocumentParams = {
   cwd?: string
   path?: string
   source?: string
+  allowBinaryRaw?: boolean
 }
 
 type ServerThreadReviewWindowParams = {
@@ -146,6 +147,7 @@ type ServerThreadReviewWindowParams = {
   source?: string
   startLine?: number
   lineCount?: number
+  allowBinaryRaw?: boolean
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -400,7 +402,7 @@ async function readGitTrackedText(cwd: string, path: string): Promise<string> {
   return result.stdout
 }
 
-async function readScopeReviewContent(cwd: string, rawPath: string): Promise<{
+async function readScopeReviewContent(cwd: string, rawPath: string, allowBinaryRaw = false): Promise<{
   cwd: string
   path: string
   repoRoot: string | null
@@ -423,7 +425,7 @@ async function readScopeReviewContent(cwd: string, rawPath: string): Promise<{
     branch: git.branch,
     isGitRepo: !!git.repoRoot,
     isText,
-    text: isText ? await readFile(currentPath, 'utf8') : '',
+    text: isText || allowBinaryRaw ? await readFile(currentPath, 'utf8') : '',
   }
 }
 
@@ -510,6 +512,7 @@ async function readReviewDocument(params: unknown): Promise<ServerThreadReviewDo
   const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
   const rawPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
   const source = normalizeReviewSource(typeof payload?.source === 'string' ? payload.source.trim() : '')
+  const allowBinaryRaw = payload?.allowBinaryRaw === true
   if (!rawCwd) {
     throw new Error('Missing cwd')
   }
@@ -529,13 +532,13 @@ async function readReviewDocument(params: unknown): Promise<ServerThreadReviewDo
       repoRoot: review.repoRoot,
       branch: review.branch,
       isGitRepo: review.isGitRepo,
-      isText: review.isText,
+      isText: review.isText || allowBinaryRaw,
       totalLines: lines.length,
       status: review.status,
     }
   }
 
-  const file = await readScopeReviewContent(cwd, rawPath)
+  const file = await readScopeReviewContent(cwd, rawPath, allowBinaryRaw)
   const lines = splitReviewLines(file.text)
   return {
     cwd: file.cwd,
@@ -545,7 +548,7 @@ async function readReviewDocument(params: unknown): Promise<ServerThreadReviewDo
     repoRoot: file.repoRoot,
     branch: file.branch,
     isGitRepo: file.isGitRepo,
-    isText: file.isText,
+    isText: file.isText || allowBinaryRaw,
     totalLines: lines.length,
     status: null,
   }
@@ -556,6 +559,7 @@ async function readReviewWindow(params: unknown): Promise<ServerThreadReviewWind
   const rawCwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
   const rawPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
   const source = normalizeReviewSource(typeof payload?.source === 'string' ? payload.source.trim() : '')
+  const allowBinaryRaw = payload?.allowBinaryRaw === true
   if (!rawCwd) {
     throw new Error('Missing cwd')
   }
@@ -573,7 +577,7 @@ async function readReviewWindow(params: unknown): Promise<ServerThreadReviewWind
 
   if (source === 'changes') {
     const review = await readChangeReviewContent(cwd, rawPath)
-    const lines = review.isText ? splitReviewLines(review.diffText) : []
+    const lines = review.isText || allowBinaryRaw ? splitReviewLines(review.diffText) : []
     return {
       cwd: review.cwd,
       path: review.path,
@@ -586,8 +590,8 @@ async function readReviewWindow(params: unknown): Promise<ServerThreadReviewWind
     }
   }
 
-  const file = await readScopeReviewContent(cwd, rawPath)
-  const lines = file.isText ? splitReviewLines(file.text) : []
+  const file = await readScopeReviewContent(cwd, rawPath, allowBinaryRaw)
+  const lines = file.isText || allowBinaryRaw ? splitReviewLines(file.text) : []
   return {
     cwd: file.cwd,
     path: file.path,
