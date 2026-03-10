@@ -129,7 +129,7 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
-test('review viewer supports inline line comments and prompt insertion', async ({ page }) => {
+test('review viewer stages inline line comments as composer review chips', async ({ page }) => {
   ensureDir(SCREENSHOT_DIR)
   await page.setViewportSize({ width: 1440, height: 960 })
   await page.goto(`${BASE_URL}/thread/thread-alpha`, { waitUntil: 'domcontentloaded' })
@@ -150,8 +150,10 @@ test('review viewer supports inline line comments and prompt insertion', async (
   await page.getByLabel('Line 3 comment').fill('rename this helper')
   await page.getByRole('button', { name: 'Save comment' }).click()
 
-  await page.getByRole('button', { name: 'Attach review to chat' }).click()
-  await expect(page.getByPlaceholder('Type a message... (@ for files, / for skills)')).toHaveValue(/# Review comments[\s\S]*@src\/components\/App\.vue:3 rename this helper/)
+  const reviewChip = page.locator('.thread-composer-review-chip').filter({ hasText: 'App.vue' })
+  await expect(reviewChip).toBeVisible()
+  await expect(reviewChip).toHaveAttribute('title', /src\/components\/App\.vue:3 rename this helper/)
+  await expect(page.getByPlaceholder('Type a message... (@ for files, / for skills)')).toHaveValue('')
   await expect(page.locator('.thread-workspace-chat .thread-composer')).toBeVisible()
   await expect(page.locator('.thread-review-panel .thread-composer')).toHaveCount(0)
 

@@ -30,6 +30,24 @@
         </span>
       </div>
 
+      <div v-if="reviewChipGroups.length > 0" class="thread-composer-review-chips">
+        <span
+          v-for="chip in reviewChipGroups"
+          :key="chip.path"
+          class="thread-composer-review-chip"
+          :title="chip.tooltip"
+        >
+          <span class="thread-composer-review-chip-name">{{ chip.label }}</span>
+          <button
+            class="thread-composer-review-chip-remove"
+            type="button"
+            :aria-label="`Remove review comments for ${chip.label}`"
+            :disabled="isInteractionDisabled"
+            @click="removeReviewComments(chip.path)"
+          >×</button>
+        </span>
+      </div>
+
       <div v-if="selectedSkills.length > 0" class="thread-composer-skill-chips">
         <span v-for="skill in selectedSkills" :key="skill.path" class="thread-composer-skill-chip">
           <span class="thread-composer-skill-chip-name">{{ skill.name }}</span>
@@ -218,7 +236,15 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ReasoningEffort } from '../../types/codex'
 import { useDictation } from '../../composables/useDictation'
+import {
+  clearThreadDraft,
+  normalizeThreadDraft,
+  readThreadDraft,
+  replaceReviewRefsForPath,
+  writeThreadDraft,
+} from '../../composables/useThreadDrafts.js'
 import { searchComposerFiles, uploadFile, type ComposerFileSuggestion } from '../../api/codexGateway'
+import { buildReviewCommentPrompt } from './threadReviewComments.js'
 import IconTablerArrowUp from '../icons/IconTablerArrowUp.vue'
 import IconTablerFilePencil from '../icons/IconTablerFilePencil.vue'
 import IconTablerMicrophone from '../icons/IconTablerMicrophone.vue'
@@ -231,6 +257,7 @@ type SkillItem = { name: string; description: string; path: string }
 
 const props = defineProps<{
   activeThreadId: string
+  draftScopeKey?: string
   cwd?: string
   models: string[]
   selectedModel: string
@@ -265,10 +292,17 @@ type SelectedImage = {
   url: string
 }
 
+type ReviewDraftRef = {
+  path: string
+  line: number
+  text: string
+}
+
 const draft = ref('')
 const selectedImages = ref<SelectedImage[]>([])
 const selectedSkills = ref<SkillItem[]>([])
 const fileAttachments = ref<FileAttachment[]>([])
+const reviewRefs = ref<ReviewDraftRef[]>([])
 
 const { state: dictationState, isSupported: isDictationSupported, startRecording, stopRecording } = useDictation({
   onTranscript: (text) => { draft.value = draft.value ? `${draft.value}\n${text}` : text },
@@ -309,11 +343,27 @@ const skillDropdownOptions = computed(() =>
     description: s.description,
   })),
 )
+const reviewChipGroups = computed(() => {
+  const grouped = new Map<string, ReviewDraftRef[]>()
+  for (const ref of reviewRefs.value) {
+    const rows = grouped.get(ref.path)
+    if (rows) rows.push(ref)
+    else grouped.set(ref.path, [ref])
+  }
+  return Array.from(grouped.entries()).map(([path, rows]) => {
+    const label = path.split('/').filter(Boolean).pop() ?? path
+    const tooltip = rows
+      .sort((left, right) => left.line - right.line)
+      .map((row) => `${row.path}:${row.line} ${row.text}`)
+      .join('\n')
+    return { path, label, tooltip }
+  })
+})
 
 const canSubmit = computed(() => {
   if (props.disabled) return false
   if (!props.activeThreadId) return false
-  return draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0
+  return draft.value.trim().length > 0 || selectedImages.value.length > 0 || fileAttachments.value.length > 0 || reviewRefs.value.length > 0
 })
 const isInteractionDisabled = computed(() => props.disabled || !props.activeThreadId)
 
@@ -322,7 +372,7 @@ const placeholderText = computed(() =>
 )
 
 function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
-  const text = draft.value.trim()
+  const text = buildSubmitText()
   if (!canSubmit.value) return
   emit('submit', {
     text,
@@ -335,6 +385,8 @@ function onSubmit(mode: 'steer' | 'queue' = 'steer'): void {
   selectedImages.value = []
   selectedSkills.value = []
   fileAttachments.value = []
+  reviewRefs.value = []
+  clearDraftState()
   isAttachMenuOpen.value = false
   isSlashMenuOpen.value = false
   closeFileMention()
@@ -382,6 +434,10 @@ function removeFileAttachment(fsPath: string): void {
   fileAttachments.value = fileAttachments.value.filter((a) => a.fsPath !== fsPath)
 }
 
+function removeReviewComments(path: string): void {
+  reviewRefs.value = reviewRefs.value.filter((row) => row.path !== path)
+}
+
 function addFileAttachment(filePath: string): void {
   const normalized = filePath.replace(/\\/g, '/')
   if (fileAttachments.value.some((a) => a.fsPath === normalized)) return
@@ -410,6 +466,18 @@ function applyReviewContext(payload: { path: string; note?: string }): void {
 
 defineExpose({
   applyReviewContext,
+  setReviewComments(path: string, comments: ReviewDraftRef[]) {
+    reviewRefs.value = replaceReviewRefsForPath(
+      {
+        text: draft.value,
+        fileAttachments: fileAttachments.value,
+        reviewRefs: reviewRefs.value,
+      },
+      path,
+      comments,
+    ).reviewRefs
+    nextTick(() => inputRef.value?.focus())
+  },
   addExternalFileAttachment(filePath: string) {
     addFileAttachment(filePath)
   },
@@ -673,6 +741,53 @@ function onDocumentClick(event: MouseEvent): void {
   isAttachMenuOpen.value = false
 }
 
+function buildSubmitText(): string {
+  const baseText = draft.value.trim()
+  const reviewText = buildReviewCommentPrompt(reviewRefs.value)
+  if (baseText && reviewText) {
+    return `${baseText}\n\n${reviewText}`
+  }
+  return reviewText || baseText
+}
+
+function draftStorage() {
+  return typeof window === 'undefined' ? null : window.localStorage
+}
+
+function currentDraftState() {
+  return normalizeThreadDraft({
+    text: draft.value,
+    fileAttachments: fileAttachments.value,
+    reviewRefs: reviewRefs.value,
+  })
+}
+
+function loadDraftState(): void {
+  const key = props.draftScopeKey?.trim() ?? ''
+  if (!key) {
+    draft.value = ''
+    fileAttachments.value = []
+    reviewRefs.value = []
+    return
+  }
+  const state = readThreadDraft(draftStorage(), key)
+  draft.value = state.text
+  fileAttachments.value = state.fileAttachments
+  reviewRefs.value = state.reviewRefs
+}
+
+function persistDraftState(): void {
+  const key = props.draftScopeKey?.trim() ?? ''
+  if (!key) return
+  writeThreadDraft(draftStorage(), key, currentDraftState())
+}
+
+function clearDraftState(): void {
+  const key = props.draftScopeKey?.trim() ?? ''
+  if (!key) return
+  clearThreadDraft(draftStorage(), key)
+}
+
 onMounted(() => {
   document.addEventListener('click', onDocumentClick)
 })
@@ -685,16 +800,24 @@ onBeforeUnmount(() => {
 })
 
 watch(
-  () => props.activeThreadId,
+  () => props.draftScopeKey,
   () => {
-    draft.value = ''
     selectedImages.value = []
     selectedSkills.value = []
-    fileAttachments.value = []
     isAttachMenuOpen.value = false
     isSlashMenuOpen.value = false
     closeFileMention()
+    loadDraftState()
   },
+  { immediate: true },
+)
+
+watch(
+  [draft, fileAttachments, reviewRefs, () => props.draftScopeKey],
+  () => {
+    persistDraftState()
+  },
+  { deep: true },
 )
 
 watch(
@@ -757,6 +880,22 @@ watch(
 
 .thread-composer-file-chip-remove {
   @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent text-zinc-400 transition hover:bg-zinc-200 hover:text-zinc-700 text-xs leading-none p-0;
+}
+
+.thread-composer-review-chips {
+  @apply mb-2 flex flex-wrap gap-1.5;
+}
+
+.thread-composer-review-chip {
+  @apply inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs text-sky-900;
+}
+
+.thread-composer-review-chip-name {
+  @apply truncate max-w-44 underline decoration-sky-400 underline-offset-2;
+}
+
+.thread-composer-review-chip-remove {
+  @apply ml-0.5 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border-0 bg-transparent text-sky-500 transition hover:bg-sky-100 hover:text-sky-900 text-xs leading-none p-0;
 }
 
 .thread-composer-skill-chips {

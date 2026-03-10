@@ -292,6 +292,7 @@
                   <ThreadComposer
                     ref="composerRef"
                     :active-thread-id="composerThreadContextId"
+                    :draft-scope-key="composerDraftScopeKey"
                     :cwd="composerCwd"
                     :models="availableModelIds"
                     :selected-model="selectedModelId"
@@ -318,7 +319,7 @@
                   :cwd="composerCwd"
                   :path="selectedReviewPath"
                   :source="selectedReviewSource"
-                  @attach-review="onAttachReviewToChat"
+                  @sync-review-comments="onSyncReviewComments"
                 />
               </ThreadReviewPanel>
 
@@ -361,6 +362,7 @@
                 />
                 <ThreadComposer :active-thread-id="composerThreadContextId"
                   :cwd="composerCwd"
+                  :draft-scope-key="composerDraftScopeKey"
                   ref="composerRef"
                   :models="availableModelIds"
                   :selected-model="selectedModelId" :selected-reasoning-effort="selectedReasoningEffort"
@@ -409,6 +411,7 @@ import {
   upsertServerGroupsCache,
   upsertServerLoadingCache,
 } from './composables/sidebarExplorerState.js'
+import { toThreadDraftStorageKey } from './composables/useThreadDrafts.js'
 import { useDesktopState } from './composables/useDesktopState'
 import { getThreadReviewChanges } from './api/codexGateway'
 import { useThreadPanels } from './composables/useThreadPanels'
@@ -484,7 +487,9 @@ const {
   toggleScope: toggleThreadScope,
   toggleChanges: toggleThreadChanges,
 } = useThreadPanels()
-const composerRef = ref<{ applyReviewContext: (payload: { path: string; note?: string }) => void } | null>(null)
+const composerRef = ref<{
+  setReviewComments: (path: string, comments: Array<{ path: string; line: number; text: string }>) => void
+} | null>(null)
 const reviewChanges = ref<UiThreadReviewChange[]>([])
 const reviewIsGitRepo = ref(false)
 const reviewErrorMessage = ref('')
@@ -583,6 +588,7 @@ const filteredMessages = computed(() =>
 )
 const liveOverlay = computed(() => selectedLiveOverlay.value)
 const composerThreadContextId = computed(() => (isHomeRoute.value ? '__new-thread__' : selectedThreadId.value))
+const composerDraftScopeKey = computed(() => toThreadDraftStorageKey(selectedServerId.value, composerThreadContextId.value))
 const composerCwd = computed(() => {
   if (isHomeRoute.value) return newThreadCwd.value.trim()
   return selectedThread.value?.cwd?.trim() ?? ''
@@ -656,16 +662,10 @@ function onSelectReviewFile(path: string, source: 'scope' | 'changes'): void {
   selectedReviewSource.value = source
 }
 
-function onAttachReviewToChat(payload: { path: string; source: 'scope' | 'changes'; repoRoot: string | null; note: string }): void {
-  const rawPath = payload.path.trim()
-  const path = payload.source === 'changes' && payload.repoRoot && !rawPath.startsWith('/')
-    ? `${payload.repoRoot.replace(/[/\\]+$/u, '')}/${rawPath.replace(/^[/\\]+/u, '')}`
-    : rawPath
+function onSyncReviewComments(payload: { path: string; comments: Array<{ path: string; line: number; text: string }> }): void {
+  const path = payload.path.trim()
   if (!path) return
-  composerRef.value?.applyReviewContext({
-    path,
-    note: payload.note,
-  })
+  composerRef.value?.setReviewComments(path, payload.comments)
 }
 
 watch([isThreadRoute, composerCwd, selectedServerId], () => {

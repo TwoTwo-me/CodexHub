@@ -18,7 +18,17 @@
           <div class="thread-review-window" :style="{ transform: `translateY(${windowState.startLine * LINE_HEIGHT}px)` }">
             <div v-for="(line, index) in windowState.lines" :key="`${windowState.startLine + index}:${line}`" class="thread-review-line-group">
               <div class="thread-review-line-row">
-                <span class="thread-review-line-number">{{ windowState.startLine + index + 1 }}</span>
+                <span class="thread-review-line-number-wrap">
+                  <span class="thread-review-line-number">{{ windowState.startLine + index + 1 }}</span>
+                  <button
+                    type="button"
+                    class="thread-review-line-add"
+                    aria-label="Add comment"
+                    @click="openDraft(windowState.startLine + index + 1)"
+                  >
+                    +
+                  </button>
+                </span>
                 <div class="thread-review-line-main">
                   <div class="thread-review-line-content">
                     <span class="thread-review-line-text">{{ displayLine(line, windowState.startLine + index + 1) }}</span>
@@ -31,14 +41,6 @@
                       Load full line
                     </button>
                   </div>
-                  <button
-                    type="button"
-                    class="thread-review-line-add"
-                    aria-label="Add comment"
-                    @click="openDraft(windowState.startLine + index + 1)"
-                  >
-                    +
-                  </button>
                 </div>
               </div>
 
@@ -73,10 +75,6 @@
           </div>
         </div>
       </div>
-
-      <button type="button" class="thread-review-attach" :disabled="commentPrompt.length === 0" @click="emitAttach">
-        Attach review to chat
-      </button>
     </template>
   </div>
 </template>
@@ -86,7 +84,6 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { getThreadReviewDocument, getThreadReviewWindow } from '../../api/codexGateway'
 import type { UiThreadReviewDocument, UiThreadReviewWindow } from '../../types/codex'
 import {
-  buildReviewCommentPrompt,
   isExpandableReviewLine,
   previewReviewLine,
   toReviewPromptPath,
@@ -102,7 +99,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'attach-review': [payload: { path: string; source: 'scope' | 'changes'; repoRoot: string | null; note: string }]
+  'sync-review-comments': [payload: { path: string; comments: Array<{ path: string; line: number; text: string }> }]
 }>()
 
 const scrollerRef = ref<HTMLDivElement | null>(null)
@@ -131,8 +128,6 @@ const promptPath = computed(() => {
   if (!current) return ''
   return toReviewPromptPath(current.path, current.repoRoot, props.cwd)
 })
-
-const commentPrompt = computed(() => buildReviewCommentPrompt(comments.value))
 
 function lineKey(line: number): string {
   return `${promptPath.value}:${String(line)}`
@@ -272,25 +267,28 @@ function saveDraft(): void {
   if (current.id) {
     comments.value = comments.value.map((comment) => comment.id === current.id ? { ...comment, text } : comment)
     draft.value = null
+    emitCurrentPathComments()
     return
   }
   commentSequence += 1
   comments.value = [...comments.value, { id: `comment-${String(commentSequence)}`, path: current.path, line: current.line, text }]
   draft.value = null
+  emitCurrentPathComments()
 }
 
 function removeComment(id: string): void {
   comments.value = comments.value.filter((comment) => comment.id !== id)
+  emitCurrentPathComments()
 }
 
-function emitAttach(): void {
-  const current = document.value
-  if (!current || commentPrompt.value.length === 0) return
-  emit('attach-review', {
-    path: current.path,
-    source: current.source,
-    repoRoot: current.repoRoot,
-    note: commentPrompt.value,
+function emitCurrentPathComments(): void {
+  const path = promptPath.value
+  if (!path) return
+  emit('sync-review-comments', {
+    path,
+    comments: comments.value
+      .filter((comment) => comment.path === path)
+      .map(({ path: nextPath, line, text }) => ({ path: nextPath, line, text })),
   })
 }
 
@@ -351,8 +349,12 @@ watch(
   @apply flex min-h-[22px] items-start gap-3 px-3 text-xs font-mono text-zinc-100;
 }
 
+.thread-review-line-number-wrap {
+  @apply relative select-none text-zinc-500 text-right shrink-0 w-12 leading-[22px];
+}
+
 .thread-review-line-number {
-  @apply select-none text-zinc-500 text-right shrink-0 w-12 leading-[22px];
+  @apply block pr-1;
 }
 
 .thread-review-line-main {
@@ -373,7 +375,7 @@ watch(
 }
 
 .thread-review-line-add {
-  @apply mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-200 opacity-0 transition hover:bg-zinc-800;
+  @apply absolute right-0 top-0 inline-flex h-5 w-5 items-center justify-center rounded border border-zinc-700 bg-zinc-900 text-zinc-200 opacity-0 transition hover:bg-zinc-800;
 }
 
 .thread-review-line-row:hover .thread-review-line-add,
@@ -401,12 +403,7 @@ watch(
 .thread-review-comment-save,
 .thread-review-comment-edit,
 .thread-review-comment-delete,
-.thread-review-comment-cancel,
-.thread-review-attach {
+.thread-review-comment-cancel {
   @apply rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 transition hover:bg-zinc-100;
-}
-
-.thread-review-attach:disabled {
-  @apply cursor-not-allowed opacity-50;
 }
 </style>
