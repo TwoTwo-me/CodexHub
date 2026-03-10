@@ -4,7 +4,7 @@
       <slot name="leading" />
     </div>
     <div class="content-main">
-      <h1 class="content-title">{{ title }}</h1>
+      <h1 v-if="title" class="content-title">{{ title }}</h1>
       <div v-if="$slots.meta" class="content-meta">
         <slot name="meta" />
       </div>
@@ -25,11 +25,11 @@ defineProps<{
 @reference "tailwindcss";
 
 .content-header {
-  @apply relative z-10 w-full min-h-12 sm:min-h-14 flex items-center gap-2 sm:gap-3 px-2 sm:px-3 pt-3 sm:pt-4 pb-2 bg-white;
+  @apply relative z-10 w-full min-h-12 sm:min-h-14 flex items-start gap-2 sm:gap-3 px-2 sm:px-3 pt-3 sm:pt-4 pb-3 bg-white border-b border-zinc-300;
 }
 
 .content-main {
-  @apply min-w-0 flex-1 flex flex-col items-start justify-center gap-0.5;
+  @apply min-w-0 flex-1 flex flex-col items-start justify-center gap-1;
 }
 
 .content-title {
@@ -41,7 +41,7 @@ defineProps<{
 }
 
 .content-actions {
-  @apply flex items-center justify-end gap-1;
+  @apply self-stretch flex items-end justify-end gap-1;
 }
 
 .content-leading {

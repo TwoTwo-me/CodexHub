@@ -22,107 +22,123 @@
   <DesktopLayout v-else :is-sidebar-collapsed="isSidebarCollapsed" @close-sidebar="setSidebarCollapsed(true)">
     <template #sidebar>
       <section class="sidebar-root">
-        <SidebarThreadControls
-          v-if="!isSidebarCollapsed"
-          class="sidebar-thread-controls-host"
-          :is-sidebar-collapsed="isSidebarCollapsed"
-          :is-auto-refresh-enabled="isAutoRefreshEnabled"
-          :auto-refresh-button-label="autoRefreshButtonLabel"
-          :show-new-thread-button="true"
-          @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
-          @toggle-auto-refresh="onToggleAutoRefreshTimer"
-          @start-new-thread="onStartNewThreadFromToolbar"
-        >
-          <button
-            class="sidebar-search-toggle"
-            type="button"
-            :aria-pressed="isSidebarSearchVisible"
-            aria-label="Search threads"
-            title="Search threads"
-            @click="toggleSidebarSearch"
+        <div class="sidebar-main">
+          <SidebarThreadControls
+            v-if="!isSidebarCollapsed"
+            class="sidebar-thread-controls-host"
+            :is-sidebar-collapsed="isSidebarCollapsed"
+            :is-auto-refresh-enabled="isAutoRefreshEnabled"
+            :auto-refresh-button-label="autoRefreshButtonLabel"
+            :show-new-thread-button="true"
+            @toggle-sidebar="setSidebarCollapsed(!isSidebarCollapsed)"
+            @toggle-auto-refresh="onToggleAutoRefreshTimer"
+            @start-new-thread="onStartNewThreadFromToolbar"
           >
-            <IconTablerSearch class="sidebar-search-toggle-icon" />
-          </button>
-        </SidebarThreadControls>
+            <button
+              class="sidebar-search-toggle"
+              type="button"
+              :aria-pressed="isSidebarSearchVisible"
+              aria-label="Search threads"
+              title="Search threads"
+              @click="toggleSidebarSearch"
+            >
+              <IconTablerSearch class="sidebar-search-toggle-icon" />
+            </button>
+          </SidebarThreadControls>
 
-        <div v-if="!isSidebarCollapsed && isSidebarSearchVisible" class="sidebar-search-bar">
-          <IconTablerSearch class="sidebar-search-bar-icon" />
-          <input
-            ref="sidebarSearchInputRef"
-            v-model="sidebarSearchQuery"
-            class="sidebar-search-input"
-            type="text"
-            placeholder="Filter threads..."
-            @keydown="onSidebarSearchKeydown"
-          />
+          <div v-if="!isSidebarCollapsed && isSidebarSearchVisible" class="sidebar-search-bar">
+            <IconTablerSearch class="sidebar-search-bar-icon" />
+            <input
+              ref="sidebarSearchInputRef"
+              v-model="sidebarSearchQuery"
+              class="sidebar-search-input"
+              type="text"
+              placeholder="Filter threads..."
+              @keydown="onSidebarSearchKeydown"
+            />
+            <button
+              v-if="sidebarSearchQuery.length > 0"
+              class="sidebar-search-clear"
+              type="button"
+              aria-label="Clear search"
+              @click="clearSidebarSearch"
+            >
+              <IconTablerX class="sidebar-search-clear-icon" />
+            </button>
+          </div>
+
           <button
-            v-if="sidebarSearchQuery.length > 0"
-            class="sidebar-search-clear"
+            v-if="!isSidebarCollapsed"
+            class="sidebar-skills-link"
+            :class="{ 'is-active': isSkillsRoute }"
             type="button"
-            aria-label="Clear search"
-            @click="clearSidebarSearch"
+            @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
           >
-            <IconTablerX class="sidebar-search-clear-icon" />
+            Skill Manager
           </button>
+
+          <button
+            v-if="!isSidebarCollapsed"
+            class="sidebar-skills-link"
+            :class="{ 'is-active': isSettingsRoute }"
+            type="button"
+            @click="router.push({ name: 'settings' }); isMobile && setSidebarCollapsed(true)"
+          >
+            Settings
+          </button>
+
+          <button
+            v-if="!isSidebarCollapsed"
+            class="sidebar-skills-link"
+            :class="{ 'is-active': isHooksRoute }"
+            type="button"
+            @click="router.push({ name: 'hooks' }); isMobile && setSidebarCollapsed(true)"
+          >
+            <span>Hooks</span>
+            <span v-if="pendingHookCount > 0" class="sidebar-alert-badge">{{ pendingHookCount }}</span>
+          </button>
+
+          <button
+            v-if="!isSidebarCollapsed && isAdminUser"
+            class="sidebar-skills-link"
+            :class="{ 'is-active': isAdminRoute }"
+            type="button"
+            @click="router.push({ name: 'admin' }); isMobile && setSidebarCollapsed(true)"
+          >
+            Admin
+          </button>
+
+          <SidebarThreadTree :groups="projectGroups" :groups-by-server-id="sidebarGroupsByServerId" :project-display-name-by-id="projectDisplayNameById"
+            :project-display-name-by-server-id="sidebarProjectDisplayNamesByServerId"
+            v-if="!isSidebarCollapsed"
+            :available-servers="availableServers"
+            :selected-server-id="selectedServerId"
+            :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
+            :loading-by-server-id="sidebarLoadingByServerId"
+            :search-query="sidebarSearchQuery"
+            :has-pending-hooks="hasPendingHooks"
+            :hook-count-by-project-name="hookCountByProjectName"
+            :hook-count-by-thread-id="hookCountByThreadId"
+            @select-server="onSelectServer"
+            @select="onSelectThreadFromSidebar"
+            @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
+            @rename-thread="onRenameThread"
+            @remove-project="onRemoveProject" @reorder-project="onReorderProject" />
         </div>
 
-        <button
-          v-if="!isSidebarCollapsed"
-          class="sidebar-skills-link"
-          :class="{ 'is-active': isSkillsRoute }"
-          type="button"
-          @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
-        >
-          Skill Manager
-        </button>
-
-        <button
-          v-if="!isSidebarCollapsed"
-          class="sidebar-skills-link"
-          :class="{ 'is-active': isSettingsRoute }"
-          type="button"
-          @click="router.push({ name: 'settings' }); isMobile && setSidebarCollapsed(true)"
-        >
-          Settings
-        </button>
-
-        <button
-          v-if="!isSidebarCollapsed"
-          class="sidebar-skills-link"
-          :class="{ 'is-active': isHooksRoute }"
-          type="button"
-          @click="router.push({ name: 'hooks' }); isMobile && setSidebarCollapsed(true)"
-        >
-          <span>Hooks</span>
-          <span v-if="pendingHookCount > 0" class="sidebar-alert-badge">{{ pendingHookCount }}</span>
-        </button>
-
-        <button
-          v-if="!isSidebarCollapsed && isAdminUser"
-          class="sidebar-skills-link"
-          :class="{ 'is-active': isAdminRoute }"
-          type="button"
-          @click="router.push({ name: 'admin' }); isMobile && setSidebarCollapsed(true)"
-        >
-          Admin
-        </button>
-
-        <SidebarThreadTree :groups="projectGroups" :groups-by-server-id="sidebarGroupsByServerId" :project-display-name-by-id="projectDisplayNameById"
-          :project-display-name-by-server-id="sidebarProjectDisplayNamesByServerId"
-          v-if="!isSidebarCollapsed"
-          :available-servers="availableServers"
-          :selected-server-id="selectedServerId"
-          :selected-thread-id="selectedThreadId" :is-loading="isLoadingThreads"
-          :loading-by-server-id="sidebarLoadingByServerId"
-          :search-query="sidebarSearchQuery"
-          :has-pending-hooks="hasPendingHooks"
-          :hook-count-by-project-name="hookCountByProjectName"
-          :hook-count-by-thread-id="hookCountByThreadId"
-          @select-server="onSelectServer"
-          @select="onSelectThreadFromSidebar"
-          @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
-          @rename-thread="onRenameThread"
-          @remove-project="onRemoveProject" @reorder-project="onReorderProject" />
+        <footer v-if="!isSidebarCollapsed" class="sidebar-session-footer">
+          <div class="sidebar-session-copy">
+            <p class="sidebar-session-label">{{ sessionLabel }}</p>
+          </div>
+          <button
+            type="button"
+            class="header-session-logout"
+            :disabled="isLoggingOut"
+            @click="void onLogout()"
+          >
+            {{ isLoggingOut ? 'Signing out…' : 'Sign out' }}
+          </button>
+        </footer>
       </section>
     </template>
 
@@ -144,41 +160,35 @@
           </template>
           <template #meta>
             <div class="header-meta-stack">
-              <div class="header-session-row">
-                <span class="header-session-identity">
-                  {{ sessionLabel }}
-                </span>
-                <button
-                  type="button"
-                  class="header-session-logout"
-                  :disabled="isLoggingOut"
-                  @click="void onLogout()"
-                >
-                  {{ isLoggingOut ? 'Signing out…' : 'Sign out' }}
-                </button>
+              <div v-if="(isHomeRoute && hasRegisteredServers) || isThreadRoute" class="header-control-row">
+                <ServerPicker
+                  :model-value="selectedServerId"
+                  :options="availableServers"
+                  mode="compact"
+                  :disabled="isThreadRoute"
+                  @update:model-value="onSelectServer"
+                />
+                <CwdPicker
+                  class="header-project-picker"
+                  :model-value="isHomeRoute ? newThreadCwd : composerCwd"
+                  :disabled="isThreadRoute"
+                  @update:model-value="(value) => { if (isHomeRoute) newThreadCwd = value }"
+                />
               </div>
-              <ServerPicker
-                v-if="(isHomeRoute && hasRegisteredServers) || isThreadRoute"
-                :model-value="selectedServerId"
-                :options="availableServers"
-                mode="compact"
-                :disabled="isThreadRoute"
-                @update:model-value="onSelectServer"
-              />
-              <p v-if="isThreadRoute" class="header-thread-subtitle">{{ threadHeaderTitle }}</p>
-              <CwdPicker v-if="isHomeRoute && hasRegisteredServers" v-model="newThreadCwd" />
+              <p v-if="isThreadRoute" class="header-thread-title">{{ threadHeaderTitle }}</p>
             </div>
           </template>
           <template #actions>
-            <ThreadPanelToggles
-              v-if="isThreadRoute && !isMobile"
-              :review-open="isThreadReviewOpen"
-              :scope-open="isThreadScopeOpen"
-              :changes-open="isThreadChangesOpen"
-              @toggle-review="toggleThreadReview()"
-              @toggle-scope="toggleThreadScope()"
-              @toggle-changes="toggleThreadChanges()"
-            />
+            <div v-if="isThreadRoute && !isMobile" class="header-panel-actions">
+              <ThreadPanelToggles
+                :review-open="isThreadReviewOpen"
+                :scope-open="isThreadScopeOpen"
+                :changes-open="isThreadChangesOpen"
+                @toggle-review="toggleThreadReview()"
+                @toggle-scope="toggleThreadScope()"
+                @toggle-changes="toggleThreadChanges()"
+              />
+            </div>
           </template>
         </ContentHeader>
 
@@ -366,9 +376,6 @@
       </section>
     </template>
   </DesktopLayout>
-  <div class="build-badge" aria-label="Worktree name">
-    WT {{ worktreeName }}
-  </div>
 </template>
 
 <script setup lang="ts">
@@ -409,7 +416,6 @@ import { useMobile } from './composables/useMobile'
 import type { ReasoningEffort, ThreadScrollState, UiThreadReviewChange } from './types/codex'
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'codex-web-local.sidebar-collapsed.v1'
-const worktreeName = import.meta.env.VITE_WORKTREE_NAME ?? 'unknown'
 
 const {
   availableServers,
@@ -558,6 +564,7 @@ const contentTitle = computed(() => {
   if (isSettingsRoute.value) return 'Settings'
   if (isHooksRoute.value) return 'Hooks'
   if (isHomeRoute.value) return 'New thread'
+  if (isThreadRoute.value) return ''
   return `${selectedServerLabel.value} / ${selectedProjectLabel.value}`
 })
 const threadHeaderTitle = computed(() => selectedThread.value?.title ?? 'Choose a thread')
@@ -1150,6 +1157,22 @@ async function onLogout(): Promise<void> {
   @apply min-h-full py-4 px-2 flex flex-col gap-2 select-none;
 }
 
+.sidebar-main {
+  @apply min-h-0 flex-1 flex flex-col gap-2 overflow-y-auto;
+}
+
+.sidebar-session-footer {
+  @apply mt-auto mx-2 rounded-xl border border-zinc-200 bg-white px-3 py-3 flex items-center justify-between gap-3;
+}
+
+.sidebar-session-copy {
+  @apply min-w-0 flex flex-col gap-0.5;
+}
+
+.sidebar-session-label {
+  @apply m-0 truncate text-sm font-medium text-zinc-700;
+}
+
 .sidebar-root input,
 .sidebar-root textarea {
   @apply select-text;
@@ -1216,11 +1239,19 @@ async function onLogout(): Promise<void> {
 }
 
 .header-meta-stack {
-  @apply min-w-0 flex flex-col gap-1;
+  @apply min-w-0 w-full flex flex-col items-end gap-2;
 }
 
-.header-thread-subtitle {
-  @apply m-0 text-sm font-semibold text-zinc-800 truncate;
+.header-control-row {
+  @apply min-w-0 w-full flex items-center justify-end gap-2 flex-wrap;
+}
+
+.header-project-picker {
+  @apply max-w-full;
+}
+
+.header-thread-title {
+  @apply m-0 w-full text-right text-sm font-semibold text-zinc-800 truncate;
 }
 
 .header-session-row {
@@ -1233,6 +1264,10 @@ async function onLogout(): Promise<void> {
 
 .header-session-logout {
   @apply rounded border border-zinc-300 px-2 py-1 text-xs text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-60 disabled:cursor-not-allowed;
+}
+
+.header-panel-actions {
+  @apply h-full flex items-end justify-end;
 }
 
 .content-body {
@@ -1329,10 +1364,6 @@ async function onLogout(): Promise<void> {
 
 .admin-guard-subtitle {
   @apply m-0 text-sm text-zinc-500;
-}
-
-.build-badge {
-  @apply fixed top-3 right-3 z-50 rounded-md border border-zinc-200 bg-white/95 px-2 py-1 text-xs font-medium text-zinc-600 shadow-sm backdrop-blur;
 }
 
 .bootstrap-setup-shell {

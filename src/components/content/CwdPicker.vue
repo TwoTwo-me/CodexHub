@@ -1,6 +1,6 @@
 <template>
   <div ref="rootRef" class="cwd-picker">
-    <button class="cwd-trigger" type="button" :aria-expanded="isOpen" @click="onToggleOpen">
+    <button class="cwd-trigger" type="button" :aria-expanded="isOpen" :disabled="disabled" @click="onToggleOpen">
       <IconTablerFolder class="cwd-trigger-icon" />
       <span class="cwd-trigger-label">{{ selectedLabel }}</span>
       <IconTablerChevronDown class="cwd-trigger-chevron" />
@@ -56,6 +56,7 @@ import IconTablerFolderOpen from '../icons/IconTablerFolderOpen.vue'
 
 const props = defineProps<{
   modelValue: string
+  disabled?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -75,6 +76,7 @@ const currentDirectoryLabel = computed(() => {
 })
 
 function onToggleOpen(): void {
+  if (props.disabled) return
   isOpen.value = !isOpen.value
   if (!isOpen.value) return
   const targetPath = props.modelValue.trim()
@@ -165,6 +167,10 @@ function formatPathLabel(path: string, homePath: string): string {
 
 .cwd-trigger {
   @apply inline-flex max-w-full items-center gap-1 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-xs text-zinc-700 transition hover:bg-zinc-100;
+}
+
+.cwd-trigger:disabled {
+  @apply cursor-not-allowed bg-zinc-100 text-zinc-500 hover:bg-zinc-100;
 }
 
 .cwd-trigger-icon {
