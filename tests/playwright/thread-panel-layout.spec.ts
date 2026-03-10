@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 
-const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4310'
-const SCREENSHOT_DIR = process.env.PLAYWRIGHT_SCREENSHOT_DIR?.trim() || '.artifacts/screenshots'
+const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:5173'
+const SCREENSHOT_DIR = process.env.PLAYWRIGHT_SCREENSHOT_DIR?.trim() || 'artifacts/thread-review-layout'
 
 function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true })
@@ -11,6 +11,7 @@ function ensureDir(path: string): void {
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('codex-web-local.sidebar-collapsed.v1', '0')
+    window.localStorage.setItem('codex-web-local.selected-server-id.v1', 'server-a')
   })
 
   await page.route('**/auth/session', async (route) => {
@@ -56,11 +57,7 @@ test.beforeEach(async ({ page }) => {
   })
 
   await page.route('**/codex-api/thread-titles', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ data: { titles: {}, order: [] } }),
-    })
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { titles: {}, order: [] } }) })
   })
 
   await page.route('**/codex-api/server-requests/pending**', async (route) => {
@@ -73,6 +70,20 @@ test.beforeEach(async ({ page }) => {
 
   await page.route('**/codex-api/meta/notifications', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+  })
+
+  await page.route('**/codex-api/composer-file-search**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: [
+          { path: 'README.md' },
+          { path: 'src/App.vue' },
+          { path: 'src/components/content/ThreadComposer.vue' },
+        ],
+      }),
+    })
   })
 
   await page.route('**/codex-api/notifications**', async (route) => {
@@ -88,8 +99,8 @@ test.beforeEach(async ({ page }) => {
   })
 
   await page.route('**/codex-api/rpc', async (route) => {
-    const requestBody = route.request().postDataJSON()
-    const method = requestBody.method
+    const body = route.request().postDataJSON() as { method?: string }
+    const method = body.method
 
     if (method === 'thread/list') {
       await route.fulfill({
@@ -97,15 +108,13 @@ test.beforeEach(async ({ page }) => {
         contentType: 'application/json',
         body: JSON.stringify({
           result: {
-            data: [
-              {
-                id: 'thread-alpha',
-                cwd: '/srv/server-a/project-alpha',
-                createdAt: 1_735_600_000,
-                updatedAt: 1_735_600_100,
-                preview: 'Alpha overview',
-              },
-            ],
+            data: [{
+              id: 'thread-alpha',
+              cwd: '/srv/server-a/project-alpha',
+              createdAt: 1_735_600_000,
+              updatedAt: 1_735_600_100,
+              preview: 'Alpha overview',
+            }],
           },
         }),
       })
@@ -121,15 +130,13 @@ test.beforeEach(async ({ page }) => {
             thread: {
               id: 'thread-alpha',
               cwd: '/srv/server-a/project-alpha',
-              turns: [
-                {
-                  id: 'thread-alpha-turn-1',
-                  items: [
-                    { id: 'thread-alpha-user', type: 'userMessage', content: [{ type: 'text', text: 'hello' }] },
-                    { id: 'thread-alpha-assistant', type: 'agentMessage', text: 'response' },
-                  ],
-                },
-              ],
+              turns: [{
+                id: 'thread-alpha-turn-1',
+                items: [
+                  { id: 'thread-alpha-user', type: 'userMessage', content: [{ type: 'text', text: 'hello' }] },
+                  { id: 'thread-alpha-assistant', type: 'agentMessage', text: 'response' },
+                ],
+              }],
             },
           },
         }),
@@ -153,21 +160,51 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
-test('thread route shows review, scope, and changes shell toggles', async ({ page }) => {
+test('desktop thread workspace shows independent Review, Scope, and Changes toggles', async ({ page }) => {
   ensureDir(SCREENSHOT_DIR)
   await page.setViewportSize({ width: 1440, height: 960 })
   await page.goto(`${BASE_URL}/thread/thread-alpha`, { waitUntil: 'domcontentloaded' })
-  await page.waitForTimeout(1500)
 
   await expect(page.getByRole('button', { name: 'Review' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Scope' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Changes' })).toBeVisible()
-  await expect(page.getByText('Review to chat').first()).toBeVisible()
-  await expect(page.getByLabel('Scope browser panel')).toBeVisible()
+  await expect(page.getByText('Review to chat')).toBeVisible()
+  await expect(page.getByText('Scope browser').first()).toBeVisible()
+  await expect(page.getByText('Change navigator').first()).toBeVisible()
+  await expect(page.getByText('Server: Server A')).toBeVisible()
+  await expect(page.getByText('Project: Project Alpha')).toBeVisible()
+  await expect(page.getByText('CWD: /srv/server-a/project-alpha')).toBeVisible()
+  await page.getByPlaceholder('Search files in scope').fill('app')
+  await expect(page.getByRole('button', { name: 'README.md' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'src/App.vue' })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Scope' }).click()
+  await expect(page.getByLabel('Scope browser panel')).toHaveCount(0)
   await expect(page.getByLabel('Change navigator panel')).toBeVisible()
 
+  await page.getByRole('button', { name: 'Changes' }).click()
+  await expect(page.getByLabel('Change navigator panel')).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Review' }).click()
+  await expect(page.getByText('Review to chat')).toHaveCount(0)
+  await expect(page.getByPlaceholder('Type a message... (@ for files, / for skills)')).toBeVisible()
+
+  await page.getByRole('button', { name: 'Review' }).click()
+  await page.getByRole('button', { name: 'Scope' }).click()
+  await page.getByRole('button', { name: 'Changes' }).click()
+  await expect(page.getByText('Review to chat')).toBeVisible()
+  await expect(page.getByText('Scope browser').first()).toBeVisible()
+  await expect(page.getByText('Change navigator').first()).toBeVisible()
+  await expect(page.getByText('Server: Server A')).toBeVisible()
+  await expect(page.getByText('Project: Project Alpha')).toBeVisible()
+  await expect(page.getByText('CWD: /srv/server-a/project-alpha')).toBeVisible()
+  await page.getByPlaceholder('Search files in scope').fill('app')
+  await expect(page.getByRole('button', { name: 'README.md' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'src/App.vue' })).toBeVisible()
+
+  await page.waitForTimeout(1200)
   await page.screenshot({
-    path: `${SCREENSHOT_DIR}/thread-panel-layout-desktop.png`,
+    path: `${SCREENSHOT_DIR}/phase1-thread-panel-layout-desktop.png`,
     fullPage: true,
   })
 })
