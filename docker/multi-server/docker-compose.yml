@@ -86,3 +86,18 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+  codex-cli-f:
+    <<: *codex-cli-service
+    command: ["codex", "app-server", "--listen", "ws://0.0.0.0:9106"]
+    ports:
+      - "127.0.0.1:19106:9106"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"const net=require('node:net');const s=net.connect(9106,'127.0.0.1');s.once('connect',()=>{s.end();process.exit(0)});s.once('error',()=>process.exit(1));setTimeout(()=>process.exit(1),1500);\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+

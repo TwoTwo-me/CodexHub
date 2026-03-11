@@ -9,7 +9,7 @@ const containerHubUrl = process.env.CODEXUI_CONTAINER_HUB_URL?.trim() || 'http:/
 const username = process.env.CODEXUI_TEST_USERNAME?.trim() || 'test'
 const password = process.env.CODEXUI_TEST_PASSWORD?.trim() || 'testtest'
 const connectorVersion = process.env.CODEXUI_CONNECTOR_VERSION?.trim() || '0.1.4'
-const services = ['codex-cli-a', 'codex-cli-b', 'codex-cli-c', 'codex-cli-d', 'codex-cli-e']
+const services = ['codex-cli-a', 'codex-cli-b', 'codex-cli-c', 'codex-cli-d', 'codex-cli-e', 'codex-cli-f']
 const connectors = services.map((service) => ({
   service,
   id: service.replace('codex-cli-', 'lab-'),
