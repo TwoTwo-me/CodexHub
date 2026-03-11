@@ -1348,11 +1348,11 @@ async function onLogout(): Promise<void> {
 }
 
 .header-meta-stack {
-  @apply min-w-0 w-full flex flex-col items-end gap-2;
+  @apply min-w-0 w-full flex flex-col items-start gap-2;
 }
 
 .header-control-row {
-  @apply min-w-0 w-full flex items-center justify-end gap-2 flex-wrap;
+  @apply min-w-0 w-full flex items-center justify-start gap-2 flex-wrap;
 }
 
 .header-project-picker {
@@ -1360,7 +1360,7 @@ async function onLogout(): Promise<void> {
 }
 
 .header-thread-title {
-  @apply m-0 w-full text-right text-sm font-semibold text-zinc-800 truncate;
+  @apply m-0 w-full text-left text-sm font-semibold text-zinc-800 truncate;
 }
 
 .header-session-row {
