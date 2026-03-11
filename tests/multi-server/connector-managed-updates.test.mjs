@@ -32,7 +32,7 @@ test('managed connector runtime bundle rewrites the runner script and preserves 
     connectorId: 'edge-alpha',
     hubAddress: 'https://hub.example.test',
     tokenFilePath: resolve(tempHome, 'edge-alpha.token'),
-    packageSpec: 'github:TwoTwo-me/codexUI#main',
+    packageSpec: 'github:TwoTwo-me/CodexHub#main',
     runnerMode: 'script',
     currentVersion: '0.1.4',
   })
@@ -94,7 +94,7 @@ test('managed connector update stages a verified artifact and finalizes the pend
     connectorId: 'edge-alpha',
     hubAddress: 'https://hub.example.test',
     tokenFilePath: resolve(tempHome, 'edge-alpha.token'),
-    packageSpec: 'github:TwoTwo-me/codexUI#main',
+    packageSpec: 'github:TwoTwo-me/CodexHub#main',
     runnerMode: 'script',
     currentVersion: '0.1.4',
   }))
@@ -127,7 +127,7 @@ test('managed connector update stages a verified artifact and finalizes the pend
   assert.deepEqual(statuses, ['downloading', 'verifying', 'applying', 'restarting'])
   const stagedState = await module.readManagedConnectorRuntimeState(statePath)
   assert.equal(stagedState.packageSpec, resolve(tempHome, 'connector-0.1.5.tgz'))
-  assert.equal(stagedState.previousPackageSpec, 'github:TwoTwo-me/codexUI#main')
+  assert.equal(stagedState.previousPackageSpec, 'github:TwoTwo-me/CodexHub#main')
   assert.equal(stagedState.pendingJobId, 'job-1')
   assert.equal(stagedState.pendingTargetVersion, '0.1.5')
 

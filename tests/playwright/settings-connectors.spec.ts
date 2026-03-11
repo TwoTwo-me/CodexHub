@@ -371,7 +371,7 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
   await expect(page.getByText('Bootstrap token is only shown once.')).toBeVisible()
   await expect(page.locator('input[value="Alpha Laptop"]').first()).toBeVisible()
   await expect(page.getByLabel('Suggested install command')).toHaveValue(/npm exec --yes/)
-  await expect(page.getByLabel('Suggested install command')).toHaveValue(/github:TwoTwo-me\/codexUI#main/)
+  await expect(page.getByLabel('Suggested install command')).toHaveValue(/github:TwoTwo-me\/CodexHub#main/)
   await expect(page.getByLabel('Suggested install command')).toHaveValue(/--token "••••••••••••••••"/)
   await expect(page.getByLabel('Suggested install command')).toHaveValue(/--token-file/)
   await expect(page.getByText('Bootstrap expires')).toBeVisible()

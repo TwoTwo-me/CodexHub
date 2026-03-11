@@ -1,4 +1,4 @@
-export const CONNECTOR_NPM_PACKAGE_SPEC = 'github:TwoTwo-me/codexUI#main'
+export const CONNECTOR_NPM_PACKAGE_SPEC = 'github:TwoTwo-me/CodexHub#main'
 export const CONNECTOR_BIN_NAME = 'codexui-connector'
 const MASKED_TOKEN_PLACEHOLDER = '••••••••••••••••'
 

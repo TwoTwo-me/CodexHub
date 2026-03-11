@@ -202,13 +202,13 @@ Settings now includes a **Browser notifications** card that:
 ### Remote host example
 
 ```bash
-npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector install \
+npm exec --yes --package=github:TwoTwo-me/CodexHub#main -- codexui-connector install \
   --hub https://hub.example.com \
   --connector edge-laptop \
   --token '<bootstrap-token>' \
   --token-file $HOME/.codexui-connector/edge-laptop.token
 
-npm exec --yes --package=github:TwoTwo-me/codexUI#main -- codexui-connector connect \
+npm exec --yes --package=github:TwoTwo-me/CodexHub#main -- codexui-connector connect \
   --hub https://hub.example.com \
   --connector edge-laptop \
   --token-file $HOME/.codexui-connector/edge-laptop.token
