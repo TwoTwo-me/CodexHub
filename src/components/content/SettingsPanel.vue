@@ -85,8 +85,8 @@
       <section class="settings-card settings-list-card">
         <div class="settings-card-header">
           <div>
-            <h3 class="settings-card-title">Registered connectors</h3>
-            <p class="settings-card-subtitle">Each connector maps to one relay-backed server in the current user scope.</p>
+            <h3 class="settings-card-title">All Connectors</h3>
+            <p class="settings-card-subtitle">Includes connected, pending, offline, expired, and reinstall-required connectors in the current user scope.</p>
           </div>
         </div>
 

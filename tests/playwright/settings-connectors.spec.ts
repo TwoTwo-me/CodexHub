@@ -325,6 +325,18 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
         latestReleaseReleaseNotesUrl: 'https://downloads.example.test/releases/0.1.5',
         updateStatus: 'update_available',
       },
+      {
+        id: 'dormant-edge',
+        serverId: 'dormant-edge',
+        name: 'Dormant Edge',
+        hubAddress: 'https://hub.example.test',
+        relayAgentId: 'agent-dormant-edge',
+        connected: false,
+        installState: 'offline',
+        credentialIssuedAtIso: '2026-03-07T06:00:00.000Z',
+        createdAtIso: '2026-03-06T06:00:00.000Z',
+        updatedAtIso: '2026-03-07T06:15:00.000Z',
+      },
     ] as MockConnector[],
     latestToken: '',
     jobsByConnector: {
@@ -349,7 +361,9 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
   await page.waitForTimeout(1200)
 
   await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible()
+  await expect(page.getByRole('heading', { level: 3, name: 'All Connectors' })).toBeVisible()
   await expect(page.getByText('Build Runner')).toBeVisible()
+  await expect(page.getByText('Dormant Edge')).toBeVisible()
   await expect(page.getByText('2 projects')).toBeVisible()
   await expect(page.getByText('4 threads')).toBeVisible()
   await expect(page.getByText('Connected').first()).toBeVisible()
