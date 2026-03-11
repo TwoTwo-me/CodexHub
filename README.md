@@ -8,6 +8,8 @@ This standalone repository is operated as a central **Hub** service with per-use
 >
 > UI foundation and interaction ideas were originally referenced from the upstream codexui project and have since been adapted for CodexHub-specific workflows.
 
+Compatibility note: **CodexHub** is the outward-facing product name for this repository. Existing `codexui`-prefixed env vars, on-disk paths, and CLI binaries remain in place where runtime compatibility depends on them.
+
 ## What changed in CodexHub
 
 - **Hub-first deployment** for a VM, cloud server, or homelab host
@@ -176,10 +178,12 @@ Persisted directories:
 
 Persisted files inside `CODEX_HOME`:
 
-- `codexui/hub.sqlite` -> SQLite database for users + Hub/global state
+- `codexui/hub.sqlite` -> SQLite database for users + Hub/global state (legacy path retained for compatibility)
 - legacy `codexui/users.json` / `.codex-global-state.json` are imported on first run and then superseded by SQLite
 
 ## Connector onboarding
+
+`codexui-connector` remains the install/connect command name for compatibility with existing remote hosts and automation.
 
 1. Sign in to the Hub
 2. Open **Settings**

@@ -1,17 +1,17 @@
 {
-  "name": "codexapp",
+  "name": "codexhub",
   "version": "0.1.4",
-  "description": "A lightweight web interface for Codex that runs on top of the Codex app-server, allowing remote access from any browser",
+  "description": "CodexHub: a multi-user Codex hub with remote Connector workflows and browser-based access",
   "type": "module",
   "license": "MIT",
   "author": "Pavel Voronin, Igor Levochkin",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/friuns/codexui.git"
+    "url": "git+https://github.com/TwoTwo-me/CodexHub.git"
   },
-  "homepage": "https://github.com/friuns/codexui#readme",
+  "homepage": "https://github.com/TwoTwo-me/CodexHub#readme",
   "bugs": {
-    "url": "https://github.com/friuns/codexui/issues"
+    "url": "https://github.com/TwoTwo-me/CodexHub/issues"
   },
   "keywords": [
     "codex",

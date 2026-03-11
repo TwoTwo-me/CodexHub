@@ -342,7 +342,7 @@ function renderLoginPage(bootstrapAdminUsername: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Codex Web Local &mdash; Login</title>
+<title>CodexHub &mdash; Login</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#09090b;color:#e4e4e7;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:1.25rem}
@@ -375,13 +375,13 @@ button.secondary:hover{background:#3f3f46}
 <body>
 <div class="shell">
   <header class="hero">
-    <h1>Codex Web Local</h1>
-    <p>Sign in to the Hub or request access for a new account.</p>
+    <h1>CodexHub</h1>
+    <p>Sign in to CodexHub or request access for a new account.</p>
   </header>
   <div class="grid">
     <section class="card">
       <h2>Sign in</h2>
-      <p>Use your approved Hub account to access registered servers, projects, and threads.</p>
+      <p>Use your approved CodexHub account to access registered servers, projects, and threads.</p>
       <form id="login-form">
         <div class="field">
           <label for="username">Username</label>

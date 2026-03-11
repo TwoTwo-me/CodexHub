@@ -1,12 +1,14 @@
-# codex-web-local — Project Specification
+# CodexHub — Project Specification
 
 ## Overview
 
-**codex-web-local** is a lightweight, browser-based web UI for [OpenAI Codex](https://github.com/openai/codex). It mirrors the Codex Desktop experience and runs on top of the Codex `app-server`, allowing remote access to a local Codex instance from any browser.
+**CodexHub** is the outward-facing product name for this repository. It is a Hub-first, browser-based control plane for [OpenAI Codex](https://github.com/openai/codex) with multi-user access, registered servers, outbound Connectors, and remote browser access to Codex workflows.
 
 - **Author:** Pavel Voronin
 - **License:** MIT
-- **Repository:** https://github.com/pavel-voronin/codex-web-local
+- **Repository:** https://github.com/TwoTwo-me/CodexHub
+
+Compatibility note: runtime identifiers such as `codex-web-local` localStorage keys, the `codexui` CLI name, and legacy cookie/storage names are intentionally retained where compatibility depends on them.
 
 ## Architecture
 
@@ -61,7 +63,7 @@
 ## Project Structure
 
 ```
-codex-web-local/
+CodexHub/
 ├── src/
 │   ├── api/                          # Backend communication layer
 │   │   ├── codexGateway.ts           # High-level API (threads, turns, models)
@@ -269,6 +271,8 @@ All frontend state is managed by `useDesktopState()` — a single Vue composable
 
 ### Persistence (localStorage)
 
+These keys intentionally keep the legacy `codex-web-local` prefix for compatibility with existing browser state.
+
 | Key | Data |
 |---|---|
 | `codex-web-local.thread-read-state.v1` | Per-thread read timestamps |
@@ -321,16 +325,16 @@ Bidirectional sync between `selectedThreadId` state and URL is handled via Vue `
 ### Production Mode
 
 ```bash
-npx codex-web-local [--port 3000] [--password mypass] [--no-password]
+npm exec --yes --package=github:TwoTwo-me/CodexHub#main -- codexui [--port 3000] [--password mypass] [--no-password]
 ```
 
-The CLI starts an Express server that serves the built frontend from `dist/` and uses the same bridge middleware. Password authentication is enabled by default with an auto-generated password printed to the console.
+The CLI starts an Express server that serves the built frontend from `dist/` and uses the same bridge middleware. The `codexui` binary name is retained for CLI compatibility. Password authentication is enabled by default with an auto-generated password printed to the console.
 
 ### Auth (Production)
 
 - Default: auto-generated password printed to console on startup
 - Login: POST `/auth/login` with `{ password }` body
-- Session: HttpOnly cookie `codex_web_local_token`
+- Session: HttpOnly cookie `codex_web_local_token` (legacy cookie name retained for compatibility)
 - Uses constant-time comparison to prevent timing attacks
 
 ## Design Principles
