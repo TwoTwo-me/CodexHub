@@ -2,11 +2,13 @@
 
 Docker-first Codex hub for **multi-user**, **multi-server**, and **outbound Connector** workflows.
 
-This fork is operated as a central **Hub** service with per-user servers, Connector lifecycle management, explicit registration, relay transport, and hardened bootstrap onboarding.
+This standalone repository is operated as a central **Hub** service with per-user servers, Connector lifecycle management, explicit registration, relay transport, and hardened bootstrap onboarding.
 
-> Upstream origin: [friuns/codexui](https://github.com/friuns/codexui)
+> Original upstream project: [friuns2/codexui](https://github.com/friuns2/codexui)
+>
+> UI foundation and interaction ideas were originally referenced from the upstream codexui project and have since been adapted for CodexHub-specific workflows.
 
-## What changed in this fork
+## What changed in CodexHub
 
 - **Hub-first deployment** for a VM, cloud server, or homelab host
 - **Explicit server registration** only — nothing appears automatically
