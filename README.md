@@ -1,6 +1,6 @@
-# CodexUI Hub
+# CodexHub
 
-Docker-first Codex hub for **multi-user**, **multi-server**, and **outbound Connector** workflows.
+Standalone Codex hub for **multi-user**, **multi-server**, and **outbound Connector** workflows.
 
 This standalone repository is operated as a central **Hub** service with per-user servers, Connector lifecycle management, explicit registration, relay transport, and hardened bootstrap onboarding.
 
@@ -25,13 +25,13 @@ This standalone repository is operated as a central **Hub** service with per-use
 - **SQLite-backed Hub persistence** for users and Hub state (`$CODEX_HOME/codexui/hub.sqlite`)
 - **Docker packaging** for the Hub with `.env`, `Dockerfile`, and `docker-compose.yml`
 
-## Architecture
+## CodexHub architecture
 
 ```text
 Browser
   │
   ▼
-CodexUI Hub
+CodexHub
   ├─ Auth / sessions / admin
   ├─ Server registry
   ├─ Connector registry
