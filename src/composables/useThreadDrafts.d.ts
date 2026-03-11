@@ -1,4 +1,8 @@
-import type { FileAttachment } from '../components/content/ThreadComposer.vue'
+export type FileAttachment = {
+  label: string
+  path: string
+  fsPath: string
+}
 
 export type ReviewDraftRef = {
   path: string
