@@ -11,3 +11,6 @@ workspace/*
 !workspace/.gitignore
 docker/local-codex/*
 !docker/local-codex/.gitignore
+
+.omx/
+artifacts/
