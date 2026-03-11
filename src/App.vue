@@ -179,14 +179,14 @@
             </div>
           </template>
           <template #actions>
-            <div v-if="isThreadRoute && !isMobile" class="header-panel-actions">
+            <div v-if="isThreadRoute" class="header-panel-actions" :class="{ 'is-mobile': isMobile }">
               <ThreadPanelToggles
-                :review-open="isThreadReviewOpen"
-                :scope-open="isThreadScopeOpen"
-                :changes-open="isThreadChangesOpen"
-                @toggle-review="toggleThreadReview()"
-                @toggle-scope="toggleThreadScope()"
-                @toggle-changes="toggleThreadChanges()"
+                :review-open="isMobile ? mobileActiveThreadPanel === 'review' : isThreadReviewOpen"
+                :scope-open="isMobile ? mobileActiveThreadPanel === 'scope' : isThreadScopeOpen"
+                :changes-open="isMobile ? mobileActiveThreadPanel === 'changes' : isThreadChangesOpen"
+                @toggle-review="onToggleReviewPanel()"
+                @toggle-scope="onToggleScopePanel()"
+                @toggle-changes="onToggleChangesPanel()"
               />
             </div>
           </template>
@@ -384,6 +384,73 @@
                   @submit="onSubmitThreadMessage" @update:selected-model="onSelectModel"
                   @update:selected-reasoning-effort="onSelectReasoningEffort" @interrupt="onInterruptTurn" />
               </div>
+
+              <section v-if="isMobile && mobileActiveThreadPanel" class="thread-mobile-panel-overlay">
+                <div class="thread-mobile-panel-shell">
+                  <header class="thread-mobile-panel-header">
+                    <div class="thread-mobile-panel-header-copy">
+                      <p class="thread-mobile-panel-title">{{ mobileThreadPanelTitle }}</p>
+                    </div>
+                    <div class="thread-mobile-panel-header-actions">
+                      <button
+                        v-if="mobileActiveThreadPanel === 'scope'"
+                        type="button"
+                        class="thread-mobile-panel-action"
+                        @click="scopeRefreshToken += 1"
+                      >
+                        Refresh
+                      </button>
+                      <button
+                        v-else-if="mobileActiveThreadPanel === 'changes'"
+                        type="button"
+                        class="thread-mobile-panel-action"
+                        @click="void refreshThreadReview()"
+                      >
+                        Refresh
+                      </button>
+                      <button type="button" class="thread-mobile-panel-close" @click="closeMobileThreadPanel()">
+                        Close
+                      </button>
+                    </div>
+                  </header>
+
+                  <div class="thread-mobile-panel-body">
+                    <template v-if="mobileActiveThreadPanel === 'review'">
+                      <ThreadReviewTabs
+                        :tabs="reviewTabs"
+                        :active-key="activeReviewTabKey"
+                        @select="(key) => { activeReviewTabKey = key }"
+                        @close="closeReviewTab"
+                      />
+                      <ThreadReviewViewer
+                        :cwd="composerCwd"
+                        :path="selectedReviewPath"
+                        :source="selectedReviewSource"
+                        :allow-binary-raw="selectedReviewAllowBinaryRaw"
+                        @sync-review-comments="onSyncReviewComments"
+                        @open-binary-raw="onOpenReviewBinaryRaw"
+                      />
+                    </template>
+                    <section v-else-if="mobileActiveThreadPanel === 'scope'" class="thread-mobile-panel-section" aria-label="Scope browser panel">
+                      <ThreadScopePanel
+                        :cwd="composerCwd"
+                        :refresh-token="scopeRefreshToken"
+                        @select-file="(path) => onSelectReviewFile(path, 'scope')"
+                      />
+                    </section>
+                    <section v-else class="thread-mobile-panel-section" aria-label="Change navigator panel">
+                      <ThreadChangesPanel
+                        :files="reviewChanges"
+                        :selected-path="selectedReviewPath"
+                        :is-git-repo="reviewIsGitRepo"
+                        :is-loading="reviewChangesLoading"
+                        :error-message="reviewErrorMessage"
+                        @select-file="(path) => onSelectReviewFile(path, 'changes')"
+                      />
+                    </section>
+                  </div>
+                </div>
+              </section>
             </div>
           </template>
         </section>
@@ -616,6 +683,12 @@ const activeReviewTab = computed(() => reviewTabs.value.find((tab) => tab.key ==
 const selectedReviewPath = computed(() => activeReviewTab.value?.path ?? '')
 const selectedReviewSource = computed<'scope' | 'changes'>(() => activeReviewTab.value?.source ?? 'changes')
 const selectedReviewAllowBinaryRaw = computed(() => activeReviewTab.value?.allowBinaryRaw === true)
+const mobileActiveThreadPanel = ref<'' | 'review' | 'scope' | 'changes'>('')
+const mobileThreadPanelTitle = computed(() => {
+  if (mobileActiveThreadPanel.value === 'scope') return 'Scope browser'
+  if (mobileActiveThreadPanel.value === 'changes') return 'Change navigator'
+  return 'Review to chat'
+})
 const threadServerIdById = computed(() => {
   const next = new Map<string, string>()
   for (const [serverKey, groups] of Object.entries(sidebarGroupsByServerId.value)) {
@@ -706,12 +779,47 @@ function onSelectReviewFile(
     updateReviewTab(key, (tab) => ({ ...tab, allowBinaryRaw: true }))
   }
   activeReviewTabKey.value = key
+  if (isMobile.value) {
+    mobileActiveThreadPanel.value = 'review'
+  }
 }
 
 function onOpenReviewBinaryRaw(): void {
   const activeTab = activeReviewTab.value
   if (!activeTab) return
   updateReviewTab(activeTab.key, (tab) => ({ ...tab, allowBinaryRaw: true }))
+}
+
+function setMobileThreadPanel(nextPanel: '' | 'review' | 'scope' | 'changes'): void {
+  mobileActiveThreadPanel.value = mobileActiveThreadPanel.value === nextPanel ? '' : nextPanel
+}
+
+function closeMobileThreadPanel(): void {
+  mobileActiveThreadPanel.value = ''
+}
+
+function onToggleReviewPanel(): void {
+  if (isMobile.value) {
+    setMobileThreadPanel('review')
+    return
+  }
+  toggleThreadReview()
+}
+
+function onToggleScopePanel(): void {
+  if (isMobile.value) {
+    setMobileThreadPanel('scope')
+    return
+  }
+  toggleThreadScope()
+}
+
+function onToggleChangesPanel(): void {
+  if (isMobile.value) {
+    setMobileThreadPanel('changes')
+    return
+  }
+  toggleThreadChanges()
 }
 
 function onSyncReviewComments(payload: { path: string; comments: Array<{ path: string; line: number; text: string }> }): void {
@@ -730,6 +838,16 @@ watch(
     if (!previous) return
     if (next[0] !== previous[0] || next[1] !== previous[1] || next[2] !== previous[2]) {
       clearReviewTabs()
+      closeMobileThreadPanel()
+    }
+  },
+)
+
+watch(
+  () => [isMobile.value, isThreadRoute.value] as const,
+  ([mobile, threadRoute]) => {
+    if (!mobile || !threadRoute) {
+      closeMobileThreadPanel()
     }
   },
 )
@@ -1379,6 +1497,10 @@ async function onLogout(): Promise<void> {
   @apply h-full flex items-end justify-end;
 }
 
+.header-panel-actions.is-mobile {
+  @apply self-start items-start;
+}
+
 .content-body {
   @apply flex-1 min-h-0 w-full flex flex-col gap-2 sm:gap-3 pt-1 pb-2 sm:pb-4 overflow-y-hidden overflow-x-visible;
 }
@@ -1412,7 +1534,7 @@ async function onLogout(): Promise<void> {
 }
 
 .thread-workspace {
-  @apply flex-1 min-h-0 flex gap-0 overflow-hidden;
+  @apply relative flex-1 min-h-0 flex gap-0 overflow-hidden;
 }
 
 .thread-workspace-chat {
@@ -1425,6 +1547,43 @@ async function onLogout(): Promise<void> {
 
 .composer-with-queue {
   @apply w-full;
+}
+
+.thread-mobile-panel-overlay {
+  @apply absolute inset-0 z-20 bg-white;
+}
+
+.thread-mobile-panel-shell {
+  @apply h-full flex flex-col bg-white;
+}
+
+.thread-mobile-panel-header {
+  @apply flex items-center justify-between gap-3 border-b border-zinc-200 px-3 py-3;
+}
+
+.thread-mobile-panel-header-copy {
+  @apply min-w-0 flex flex-col;
+}
+
+.thread-mobile-panel-title {
+  @apply m-0 text-sm font-semibold text-zinc-900;
+}
+
+.thread-mobile-panel-header-actions {
+  @apply flex items-center gap-2;
+}
+
+.thread-mobile-panel-action,
+.thread-mobile-panel-close {
+  @apply rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100;
+}
+
+.thread-mobile-panel-body {
+  @apply flex-1 min-h-0 overflow-hidden;
+}
+
+.thread-mobile-panel-section {
+  @apply h-full min-h-0 overflow-auto px-3 py-3;
 }
 
 .thread-panel-copy {
