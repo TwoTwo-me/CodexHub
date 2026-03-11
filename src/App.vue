@@ -78,16 +78,6 @@
             <span v-if="pendingHookCount > 0" class="sidebar-alert-badge">{{ pendingHookCount }}</span>
           </button>
 
-          <button
-            v-if="!isSidebarCollapsed && isAdminUser"
-            class="sidebar-skills-link"
-            :class="{ 'is-active': isAdminRoute }"
-            type="button"
-            @click="router.push({ name: 'admin' }); isMobile && setSidebarCollapsed(true)"
-          >
-            Admin
-          </button>
-
           <SidebarThreadTree :groups="projectGroups" :groups-by-server-id="sidebarGroupsByServerId" :project-display-name-by-id="projectDisplayNameById"
             :project-display-name-by-server-id="sidebarProjectDisplayNamesByServerId"
             v-if="!isSidebarCollapsed"
@@ -123,6 +113,16 @@
             @click="router.push({ name: 'settings' }); isMobile && setSidebarCollapsed(true)"
           >
             Settings
+          </button>
+
+          <button
+            v-if="isAdminUser"
+            class="sidebar-skills-link"
+            :class="{ 'is-active': isAdminRoute }"
+            type="button"
+            @click="router.push({ name: 'admin' }); isMobile && setSidebarCollapsed(true)"
+          >
+            Admin
           </button>
         </div>
 
