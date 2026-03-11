@@ -265,7 +265,7 @@
             </div>
           </template>
           <template v-else>
-            <div class="thread-workspace">
+            <div class="thread-workspace" :class="{ 'is-mobile': isMobile }">
               <div class="thread-workspace-chat">
                 <div class="content-thread">
                   <ThreadConversation :messages="filteredMessages" :is-loading="isLoadingMessages"
@@ -361,7 +361,7 @@
                 </template>
               </ThreadUtilityPanel>
 
-              <div v-if="isMobile" class="composer-with-queue">
+              <div v-if="isMobile" class="composer-with-queue composer-with-queue-mobile">
                 <QueuedMessages
                   :messages="selectedThreadQueuedMessages"
                   @steer="steerQueuedMessage"
@@ -1537,8 +1537,16 @@ async function onLogout(): Promise<void> {
   @apply relative flex-1 min-h-0 flex gap-0 overflow-hidden;
 }
 
+.thread-workspace.is-mobile {
+  @apply flex-col;
+}
+
 .thread-workspace-chat {
   @apply flex-1 min-w-0 min-h-0 flex flex-col;
+}
+
+.thread-workspace.is-mobile .thread-workspace-chat {
+  @apply flex-1 min-h-0;
 }
 
 .content-thread {
@@ -1547,6 +1555,10 @@ async function onLogout(): Promise<void> {
 
 .composer-with-queue {
   @apply w-full;
+}
+
+.composer-with-queue-mobile {
+  @apply shrink-0 border-t border-zinc-200 bg-white pb-[env(safe-area-inset-bottom,0px)];
 }
 
 .thread-mobile-panel-overlay {
