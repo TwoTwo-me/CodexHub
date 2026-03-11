@@ -70,26 +70,6 @@
           <button
             v-if="!isSidebarCollapsed"
             class="sidebar-skills-link"
-            :class="{ 'is-active': isSkillsRoute }"
-            type="button"
-            @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
-          >
-            Skill Manager
-          </button>
-
-          <button
-            v-if="!isSidebarCollapsed"
-            class="sidebar-skills-link"
-            :class="{ 'is-active': isSettingsRoute }"
-            type="button"
-            @click="router.push({ name: 'settings' }); isMobile && setSidebarCollapsed(true)"
-          >
-            Settings
-          </button>
-
-          <button
-            v-if="!isSidebarCollapsed"
-            class="sidebar-skills-link"
             :class="{ 'is-active': isHooksRoute }"
             type="button"
             @click="router.push({ name: 'hooks' }); isMobile && setSidebarCollapsed(true)"
@@ -124,6 +104,26 @@
             @archive="onArchiveThread" @start-new-thread="onStartNewThread" @rename-project="onRenameProject"
             @rename-thread="onRenameThread"
             @remove-project="onRemoveProject" @reorder-project="onReorderProject" />
+        </div>
+
+        <div v-if="!isSidebarCollapsed" class="sidebar-secondary-links">
+          <button
+            class="sidebar-skills-link"
+            :class="{ 'is-active': isSkillsRoute }"
+            type="button"
+            @click="router.push({ name: 'skills' }); isMobile && setSidebarCollapsed(true)"
+          >
+            Skill Manager
+          </button>
+
+          <button
+            class="sidebar-skills-link"
+            :class="{ 'is-active': isSettingsRoute }"
+            type="button"
+            @click="router.push({ name: 'settings' }); isMobile && setSidebarCollapsed(true)"
+          >
+            Settings
+          </button>
         </div>
 
         <footer v-if="!isSidebarCollapsed" class="sidebar-session-footer">
@@ -1264,6 +1264,10 @@ async function onLogout(): Promise<void> {
 
 .sidebar-main {
   @apply min-h-0 flex-1 flex flex-col gap-2 overflow-y-auto;
+}
+
+.sidebar-secondary-links {
+  @apply mx-2 mt-2 pt-2 border-t border-zinc-200 flex flex-col gap-1;
 }
 
 .sidebar-session-footer {

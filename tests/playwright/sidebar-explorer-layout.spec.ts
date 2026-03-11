@@ -179,5 +179,11 @@ test('sidebar supports multi-server expansion, inline thread rename, duplicate p
   await expect(page.getByText('Alpha project')).toBeVisible()
   await expect(page.getByText(/project-beta|Beta project/i)).toBeVisible()
 
+  const explorerBox = await page.locator('.thread-tree-root').boundingBox()
+  const secondaryLinksBox = await page.locator('.sidebar-secondary-links').boundingBox()
+  expect(explorerBox).not.toBeNull()
+  expect(secondaryLinksBox).not.toBeNull()
+  expect((secondaryLinksBox?.y ?? 0)).toBeGreaterThan((explorerBox?.y ?? 0) + (explorerBox?.height ?? 0) - 1)
+
   await page.screenshot({ path: `${SCREENSHOT_DIR}/sidebar-explorer-layout-desktop.png`, fullPage: true })
 })
