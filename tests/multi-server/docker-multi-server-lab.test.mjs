@@ -8,16 +8,20 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..')
 
-test('multi-server compose defines five codex lab containers', async () => {
+test('multi-server compose defines three codex lab containers', async () => {
   const composePath = resolve(repoRoot, 'docker', 'multi-server', 'docker-compose.yml')
   const content = await readFile(composePath, 'utf8')
 
-  for (const service of ['codex-cli-a', 'codex-cli-b', 'codex-cli-c', 'codex-cli-d', 'codex-cli-e']) {
+  for (const service of ['codex-cli-a', 'codex-cli-b', 'codex-cli-c']) {
     assert.match(content, new RegExp(`^\\s{2}${service}:`, 'm'))
   }
 
-  for (const port of ['19101', '19102', '19103', '19104', '19105']) {
+  for (const port of ['19101', '19102', '19103']) {
     assert.match(content, new RegExp(`127\\.0\\.0\\.1:${port}:9\\d{3}`))
+  }
+
+  for (const unexpectedService of ['codex-cli-d', 'codex-cli-e', 'codex-cli-f']) {
+    assert.doesNotMatch(content, new RegExp(`^\\s{2}${unexpectedService}:`, 'm'))
   }
 })
 
@@ -45,7 +49,7 @@ test('multi-server smoke bootstraps oh-my-codex and checks for session leakage',
   const scriptPath = resolve(repoRoot, 'scripts', 'docker', 'multi-server-smoke.sh')
   const content = await readFile(scriptPath, 'utf8')
 
-  assert.match(content, /services=\(codex-cli-a codex-cli-b codex-cli-c codex-cli-d codex-cli-e\)/)
+  assert.match(content, /services=\(codex-cli-a codex-cli-b codex-cli-c\)/)
   assert.match(content, /omx setup --scope user --force/)
   assert.match(content, /omx doctor/)
   assert.match(content, /test ! -e \/root\/\.omx\/state\/sessions/)

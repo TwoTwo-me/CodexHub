@@ -21,7 +21,7 @@ npm run docker:hub:smoke
 
 ## What the lab stack does
 
-It starts multiple Codex CLI containers that expose `codex app-server` over websocket endpoints so the Hub can exercise multi-server registration and remote-runtime behavior during testing.
+It starts three Codex CLI containers that expose `codex app-server` over websocket endpoints so the Hub can exercise multi-server registration and remote-runtime behavior during testing.
 
 ## Files
 
@@ -72,6 +72,7 @@ The disposable lab compose file exposes websocket listeners on:
 
 - `ws://127.0.0.1:19101`
 - `ws://127.0.0.1:19102`
+- `ws://127.0.0.1:19103`
 
 These are intended for automated tests and local experimentation, not for the public Hub deployment.
 

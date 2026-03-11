@@ -6,8 +6,8 @@ COMPOSE_FILE="$ROOT_DIR/docker/multi-server/docker-compose.yml"
 AUTH_FILE="${CODEX_MULTI_SERVER_AUTH_FILE:-${TMPDIR:-/tmp}/codexui-multi-server-auth/auth.json}"
 export CODEX_MULTI_SERVER_AUTH_FILE="$AUTH_FILE"
 
-services=(codex-cli-a codex-cli-b codex-cli-c codex-cli-d codex-cli-e codex-cli-f)
-ports=(19101 19102 19103 19104 19105 19106)
+services=(codex-cli-a codex-cli-b codex-cli-c)
+ports=(19101 19102 19103)
 
 bootstrap_omx() {
   local service="$1"
