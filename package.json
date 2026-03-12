@@ -41,7 +41,7 @@
     "build": "npm run build:frontend && npm run build:cli",
     "preview": "vite preview",
     "prepublishOnly": "npm run build",
-    "test:multi-server": "npm run build:cli && node --test tests/multi-server",
+    "test:multi-server": "npm run build:cli && node --test --test-concurrency=1 tests/multi-server",
     "test:playwright:admin": "playwright test tests/playwright/phase2-admin-ui.spec.ts",
     "docker:hub:build": "docker compose --project-directory . -f docker-compose.yml build hub",
     "docker:hub:prepare-auth": "bash scripts/docker/hub-prepare-codex-auth.sh",
