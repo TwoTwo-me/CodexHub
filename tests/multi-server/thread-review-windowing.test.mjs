@@ -30,7 +30,7 @@ async function getAvailablePort() {
 }
 
 async function runCommand(args, { input, cwd = repoRoot, env } = {}) {
-  const child = spawn('node', args, {
+  const child = spawn(process.execPath, args, {
     cwd,
     env: createBaseEnv(env),
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -88,7 +88,7 @@ async function startServer() {
   const port = await getAvailablePort()
   const codeHome = await mkdtemp(join(tmpdir(), 'codexui-review-windowing-'))
   const passwordHash = await generatePasswordHash('window-secret-pass-1')
-  const child = spawn('node', ['dist-cli/index.js', '--host', '127.0.0.1', '--port', String(port), '--username', 'window-admin', '--password-hash', passwordHash], {
+  const child = spawn(process.execPath, ['dist-cli/index.js', '--host', '127.0.0.1', '--port', String(port), '--username', 'window-admin', '--password-hash', passwordHash], {
     cwd: repoRoot,
     env: createBaseEnv({ CODEX_HOME: codeHome }),
     stdio: ['ignore', 'pipe', 'pipe'],
