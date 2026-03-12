@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..')
+const HUB_COMPATIBILITY_VERSION = '0.1.4'
 
 function createBaseEnv(overrides = {}) {
   const env = {
@@ -243,7 +244,7 @@ test('hub exposes connector telemetry, compatible releases, and user-scoped conn
         Accept: 'application/json',
       },
       body: JSON.stringify({
-        connectorVersion: '0.1.4',
+        connectorVersion: '0.1.3',
         runnerMode: 'script',
         platform: 'linux-x64',
         updateCapable: true,
@@ -264,7 +265,7 @@ test('hub exposes connector telemetry, compatible releases, and user-scoped conn
         Accept: 'application/json',
       },
       body: JSON.stringify({
-        connectorVersion: '0.1.4',
+        connectorVersion: '0.1.3',
         runnerMode: 'script',
         platform: 'linux-x64',
         updateCapable: true,
@@ -277,12 +278,12 @@ test('hub exposes connector telemetry, compatible releases, and user-scoped conn
     const releaseResponse = await putJson(`${server.baseUrl}/codex-api/admin/connectors/releases`, {
       releases: [
         {
-          version: '0.1.5',
-          artifactUrl: 'https://downloads.example.test/codexui-connector-0.1.5.tgz',
+          version: HUB_COMPATIBILITY_VERSION,
+          artifactUrl: `https://downloads.example.test/codexui-connector-${HUB_COMPATIBILITY_VERSION}.tgz`,
           sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           runnerModes: ['script', 'systemd-user', 'pm2-user'],
           platforms: ['linux'],
-          releaseNotesUrl: 'https://downloads.example.test/releases/0.1.5',
+          releaseNotesUrl: `https://downloads.example.test/releases/${HUB_COMPATIBILITY_VERSION}`,
           publishedAtIso: '2026-03-08T10:00:00.000Z',
         },
       ],
@@ -306,12 +307,12 @@ test('hub exposes connector telemetry, compatible releases, and user-scoped conn
     })), [
       {
         id: 'edge-alpha',
-        connectorVersion: '0.1.4',
+        connectorVersion: '0.1.3',
         runnerMode: 'script',
         platform: 'linux-x64',
         updateCapable: true,
         restartCapable: true,
-        latestReleaseVersion: '0.1.5',
+        latestReleaseVersion: HUB_COMPATIBILITY_VERSION,
         updateStatus: 'update_available',
       },
     ])
@@ -328,7 +329,7 @@ test('hub exposes connector telemetry, compatible releases, and user-scoped conn
     const createJobBody = await createJobResponse.json()
     assert.equal(createJobBody.data.job.action, 'update')
     assert.equal(createJobBody.data.job.status, 'queued')
-    assert.equal(createJobBody.data.job.targetVersion, '0.1.5')
+    assert.equal(createJobBody.data.job.targetVersion, HUB_COMPATIBILITY_VERSION)
 
     const pollResponse = await fetch(`${server.baseUrl}/codex-api/connector-agent/jobs/poll`, {
       method: 'POST',
@@ -338,7 +339,7 @@ test('hub exposes connector telemetry, compatible releases, and user-scoped conn
         Accept: 'application/json',
       },
       body: JSON.stringify({
-        connectorVersion: '0.1.4',
+        connectorVersion: '0.1.3',
         runnerMode: 'script',
         platform: 'linux-x64',
         updateCapable: true,
@@ -350,7 +351,7 @@ test('hub exposes connector telemetry, compatible releases, and user-scoped conn
     const pollBody = await pollResponse.json()
     assert.equal(pollBody.data.job.id, createJobBody.data.job.id)
     assert.equal(pollBody.data.job.action, 'update')
-    assert.equal(pollBody.data.job.artifact.version, '0.1.5')
+    assert.equal(pollBody.data.job.artifact.version, HUB_COMPATIBILITY_VERSION)
 
     const updateHistoryResponse = await fetch(`${server.baseUrl}/codex-api/connectors/edge-alpha/update-jobs`, {
       headers: { Cookie: ownerCookie },
@@ -359,6 +360,34 @@ test('hub exposes connector telemetry, compatible releases, and user-scoped conn
     const updateHistoryBody = await updateHistoryResponse.json()
     assert.equal(updateHistoryBody.data.jobs.length, 1)
     assert.equal(updateHistoryBody.data.jobs[0].status, 'queued')
+  } finally {
+    await server.stop()
+  }
+})
+
+test('hub rejects connector release registrations above the Hub compatibility version', async () => {
+  const server = await startServer()
+
+  try {
+    const bootstrapCookie = await login(server.baseUrl, 'bootstrap-admin', 'bootstrap-pass-1')
+    await completeBootstrap(server.baseUrl, bootstrapCookie, 'bootstrap-pass-1', 'primary-admin', 'primary-pass-2')
+    const adminCookie = await login(server.baseUrl, 'primary-admin', 'primary-pass-2')
+
+    const releaseResponse = await putJson(`${server.baseUrl}/codex-api/admin/connectors/releases`, {
+      releases: [
+        {
+          version: '0.1.5',
+          artifactUrl: 'https://downloads.example.test/codexui-connector-0.1.5.tgz',
+          sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+          runnerModes: ['script', 'systemd-user', 'pm2-user'],
+          platforms: ['linux'],
+        },
+      ],
+    }, { Cookie: adminCookie })
+
+    assert.equal(releaseResponse.status, 400)
+    const releaseBody = await releaseResponse.json()
+    assert.match(releaseBody.error, /exceeds Hub compatibility version 0\.1\.4/i)
   } finally {
     await server.stop()
   }

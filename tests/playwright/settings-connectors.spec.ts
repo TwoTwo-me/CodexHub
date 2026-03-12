@@ -45,6 +45,9 @@ type MockConnectorJob = {
   targetVersion?: string
 }
 
+const HUB_COMPATIBILITY_VERSION = '0.1.4'
+const HUB_PACKAGE_SPEC = `github:TwoTwo-me/CodexHub#v${HUB_COMPATIBILITY_VERSION}`
+
 function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true })
 }
@@ -221,7 +224,7 @@ async function mockSettingsApi(page: Page, state: { connectors: MockConnector[];
         action: 'update',
         status: 'queued',
         requestedAtIso: '2026-03-08T09:00:00.000Z',
-        targetVersion: connector?.latestReleaseVersion ?? '0.1.5',
+        targetVersion: connector?.latestReleaseVersion ?? HUB_COMPATIBILITY_VERSION,
       }
       state.jobsByConnector[connectorId] = [job]
       await route.fulfill({
@@ -314,15 +317,15 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
         createdAtIso: '2026-03-06T07:00:00.000Z',
         updatedAtIso: '2026-03-07T07:15:00.000Z',
         lastSeenAtIso: '2026-03-07T07:15:00.000Z',
-        connectorVersion: '0.1.4',
+        connectorVersion: '0.1.3',
         runnerMode: 'script',
         platform: 'linux-x64',
         updateCapable: true,
         restartCapable: true,
         lastTelemetryAtIso: '2026-03-07T07:15:00.000Z',
-        latestReleaseVersion: '0.1.5',
+        latestReleaseVersion: HUB_COMPATIBILITY_VERSION,
         latestReleasePublishedAtIso: '2026-03-08T08:00:00.000Z',
-        latestReleaseReleaseNotesUrl: 'https://downloads.example.test/releases/0.1.5',
+        latestReleaseReleaseNotesUrl: 'https://downloads.example.test/releases/0.1.4',
         updateStatus: 'update_available',
       },
       {
@@ -367,14 +370,14 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
   await expect(page.getByText('2 projects')).toBeVisible()
   await expect(page.getByText('4 threads')).toBeVisible()
   await expect(page.getByText('Connected').first()).toBeVisible()
+  await expect(page.locator('input[value="0.1.3"]').first()).toBeVisible()
   await expect(page.locator('input[value="0.1.4"]').first()).toBeVisible()
-  await expect(page.locator('input[value="0.1.5"]').first()).toBeVisible()
   await expect(page.getByText('Update available')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Restart connector' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Update connector' })).toBeVisible()
   await page.getByRole('button', { name: 'Update connector' }).click()
   await expect(page.getByText('job-build-runner-update').first()).toBeVisible()
-  await expect(page.getByText('Target version 0.1.5')).toBeVisible()
+  await expect(page.getByText('Target version 0.1.4')).toBeVisible()
 
   await page.getByLabel('Connector name').fill('Alpha Laptop')
   await page.getByLabel('Connector id').fill('alpha-laptop')
@@ -385,7 +388,7 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
   await expect(page.getByText('Bootstrap token is only shown once.')).toBeVisible()
   await expect(page.locator('input[value="Alpha Laptop"]').first()).toBeVisible()
   await expect(page.getByLabel('Suggested install command')).toHaveValue(/npm exec --yes/)
-  await expect(page.getByLabel('Suggested install command')).toHaveValue(/github:TwoTwo-me\/CodexHub#main/)
+  await expect(page.getByLabel('Suggested install command')).toHaveValue(new RegExp(HUB_PACKAGE_SPEC.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
   await expect(page.getByLabel('Suggested install command')).toHaveValue(/--token "••••••••••••••••"/)
   await expect(page.getByLabel('Suggested install command')).toHaveValue(/--token-file/)
   await expect(page.getByText('Bootstrap expires')).toBeVisible()

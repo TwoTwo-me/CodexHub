@@ -111,7 +111,7 @@ test('connector package provisions a connector via hub login and returns an inst
       bootstrapToken: provisioned.bootstrapToken,
     })
     assert.match(installCommand, /npm exec --yes/)
-    assert.match(installCommand, /--package="github:TwoTwo-me\/CodexHub#main"/)
+    assert.match(installCommand, new RegExp(`--package=\"${module.CONNECTOR_NPM_PACKAGE_SPEC.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\"`))
     assert.match(installCommand, /codexui-connector install/)
     assert.match(installCommand, /edge-laptop/)
     assert.match(installCommand, /--token-file/)
@@ -181,6 +181,7 @@ test('connector install command refuses bootstrap input that would discard the d
 })
 
 test('connector install CLI accepts inline bootstrap token when a token file is provided for credential persistence', async () => {
+  const module = await loadConnectorModule()
   const connectorEntrypoint = resolve(repoDir, 'dist-cli/connector.js')
   const tempDir = await mkdtemp(resolve(tmpdir(), 'codexui-inline-install-'))
   const fakeHome = await mkdtemp(resolve(tmpdir(), 'codexui-inline-home-'))
@@ -282,7 +283,7 @@ test('connector install CLI accepts inline bootstrap token when a token file is 
     assert.match(managedRunnerScript, /npm exec --yes --package=/)
     assert.match(managedRunnerScript, /--runtime-state-file/)
     assert.equal(managedRunnerState.connectorId, 'edge-laptop')
-    assert.equal(managedRunnerState.packageSpec, 'github:TwoTwo-me/CodexHub#main')
+    assert.equal(managedRunnerState.packageSpec, module.CONNECTOR_NPM_PACKAGE_SPEC)
     assert.equal(managedRunnerState.tokenFilePath, tokenFilePath)
     assert.match(systemdScript, /systemctl --user enable --now codexui-connector-edge-laptop\.service/)
     assert.doesNotMatch(systemdScript, /\nloginctl enable-linger /)
