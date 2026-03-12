@@ -4,9 +4,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const repoRoot = '/root/analyze_codexApp/codexui'
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(__dirname, '../..')
 
 function createBaseEnv(overrides = {}) {
   return {
