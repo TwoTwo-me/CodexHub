@@ -83,13 +83,13 @@ Choose a release tag and download only:
 - `docker-compose.ghcr.yml`
 - `.env`
 
-For example:
+For example, use `main` for the latest branch build or swap in a release tag such as `v0.1.5` after it has been published:
 
 ```bash
-export CODEXHUB_TAG=v0.1.4
+export CODEXHUB_REF=main
 mkdir -p codexhub && cd codexhub
-curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/docker-compose.ghcr.yml"
-curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/.env"
+curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/docker-compose.ghcr.yml"
+curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/.env"
 ```
 
 If the GHCR package is private, run `docker login ghcr.io` before the next step.
@@ -97,7 +97,7 @@ If the GHCR package is private, run `docker login ghcr.io` before the next step.
 Then set:
 
 ```dotenv
-CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:v0.1.4
+CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:main
 CODEXUI_PUBLIC_URL=http://localhost:4300
 ```
 
@@ -106,7 +106,7 @@ Generate the bootstrap hash with the published image:
 ```bash
 read -sr -p "Bootstrap admin password: " PW; printf '\n'
 printf '%s' "$PW" | docker run --rm -i --entrypoint node \
-  ghcr.io/twotwo-me/codexhub:v0.1.4 \
+  ghcr.io/twotwo-me/codexhub:${CODEXHUB_REF} \
   dist-cli/index.js hash-password --password-stdin --env
 unset PW
 ```

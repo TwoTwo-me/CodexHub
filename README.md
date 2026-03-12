@@ -65,26 +65,26 @@ This path only needs:
 - `.env`
 - Docker + Docker Compose
 
-The examples below pin the downloaded files and GHCR image to the same release tag. If the GHCR package is private, run `docker login ghcr.io` first.
+The examples below use the same Git ref for both the downloaded files and the GHCR image. Use `main` for the latest branch build, or replace it with a release tag such as `v0.1.5` once that tag has been published. If the GHCR package is private, run `docker login ghcr.io` first.
 
 #### 1. Download the deployment files
 
 With `curl`:
 
 ```bash
-export CODEXHUB_TAG=v0.1.4
+export CODEXHUB_REF=main
 mkdir -p codexhub && cd codexhub
-curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/docker-compose.ghcr.yml"
-curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/.env"
+curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/docker-compose.ghcr.yml"
+curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/.env"
 ```
 
 With `wget`:
 
 ```bash
-export CODEXHUB_TAG=v0.1.4
+export CODEXHUB_REF=main
 mkdir -p codexhub && cd codexhub
-wget "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/docker-compose.ghcr.yml"
-wget "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/.env"
+wget "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/docker-compose.ghcr.yml"
+wget "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/.env"
 ```
 
 #### 2. Pin `.env` to the same image tag
@@ -92,7 +92,7 @@ wget "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/.env"
 Edit `.env` and set at minimum:
 
 ```dotenv
-CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:v0.1.4
+CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:main
 CODEXUI_PUBLIC_URL=http://localhost:4300
 ```
 
@@ -113,7 +113,7 @@ Keep a **hash** in `.env`, not the plaintext password.
 ```bash
 read -sr -p "Bootstrap admin password: " PW; printf '\n'
 printf '%s' "$PW" | docker run --rm -i --entrypoint node \
-  "ghcr.io/twotwo-me/codexhub:${CODEXHUB_TAG}" \
+  "ghcr.io/twotwo-me/codexhub:${CODEXHUB_REF}" \
   dist-cli/index.js hash-password --password-stdin --env
 unset PW
 ```
