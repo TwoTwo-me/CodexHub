@@ -25,7 +25,7 @@ Compatibility note: **CodexHub** is the outward-facing product name for this rep
 - **Outbound-only Connector model** for remote Codex hosts
 - **Bootstrap hardening**: one-time install token -> durable runtime credential
 - **SQLite-backed Hub persistence** for users and Hub state (`$CODEX_HOME/codexui/hub.sqlite`)
-- **Docker packaging** for the Hub with `.env`, `Dockerfile`, and `docker-compose.yml`
+- **Docker packaging** for the Hub with `.env`, `Dockerfile`, `docker-compose.yml`, and `docker-compose.ghcr.yml`
 
 ## CodexHub architecture
 
@@ -50,9 +50,113 @@ CodexHub
       Codex CLI / codex app-server
 ```
 
-## Quick start (recommended)
+## Quick start paths
 
-### 1. Generate a bootstrap admin password hash
+CodexHub now supports two Docker entry points:
+
+1. **Quick deploy without `git clone`** via a published GHCR image
+2. **Development / build from source** via the checked-out repository
+
+### Option A (recommended for operators): quick deploy without `git clone`
+
+This path only needs:
+
+- `docker-compose.ghcr.yml`
+- `.env`
+- Docker + Docker Compose
+
+The examples below pin the downloaded files and GHCR image to the same release tag. If the GHCR package is private, run `docker login ghcr.io` first.
+
+#### 1. Download the deployment files
+
+With `curl`:
+
+```bash
+export CODEXHUB_TAG=v0.1.4
+mkdir -p codexhub && cd codexhub
+curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/docker-compose.ghcr.yml"
+curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/.env"
+```
+
+With `wget`:
+
+```bash
+export CODEXHUB_TAG=v0.1.4
+mkdir -p codexhub && cd codexhub
+wget "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/docker-compose.ghcr.yml"
+wget "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/.env"
+```
+
+#### 2. Pin `.env` to the same image tag
+
+Edit `.env` and set at minimum:
+
+```dotenv
+CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:v0.1.4
+CODEXUI_PUBLIC_URL=http://localhost:4300
+```
+
+Commonly adjusted:
+
+```dotenv
+CODEXUI_HOST_PORT=4300
+CODEXUI_DATA_DIR=./.data/hub
+CODEXUI_WORKSPACE_DIR=./workspace
+CODEXUI_CODEX_HOME_DIR=./docker/local-codex
+CODEXUI_SKIP_CODEX_LOGIN=true
+```
+
+#### 3. Generate a bootstrap admin password hash with the published image
+
+Keep a **hash** in `.env`, not the plaintext password.
+
+```bash
+read -sr -p "Bootstrap admin password: " PW; printf '\n'
+printf '%s' "$PW" | docker run --rm -i --entrypoint node \
+  "ghcr.io/twotwo-me/codexhub:${CODEXHUB_TAG}" \
+  dist-cli/index.js hash-password --password-stdin --env
+unset PW
+```
+
+Paste the printed `CODEXUI_ADMIN_PASSWORD_HASH=scrypt$$...` line into `.env`.
+
+#### 4. Start the Hub
+
+```bash
+docker compose -f docker-compose.ghcr.yml up -d hub
+```
+
+#### 5. First login: complete the setup wizard
+
+- Open `http://localhost:4300`
+- Sign in as the bootstrap admin (`admin` by default) with the plaintext password you used to generate the hash
+- You will be forced to `/setup/bootstrap-admin`
+- Change the admin username and password before using the rest of the Hub
+
+#### 6. Remove the bootstrap hash for steady-state restarts
+
+After the setup wizard succeeds, remove the bootstrap hash from `.env`:
+
+```dotenv
+CODEXUI_ADMIN_PASSWORD_HASH=
+CODEXUI_ADMIN_PASSWORD_HASH_FILE=
+```
+
+The Hub can now restart with the rotated SQLite-backed admin account and no bootstrap secret in `.env`.
+
+### Option B: development / build from source
+
+Use this path when you want to hack on the repository, build locally, or keep using the existing helper scripts.
+
+#### 1. Clone the repository and install dependencies
+
+```bash
+git clone https://github.com/TwoTwo-me/CodexHub.git
+cd CodexHub
+npm ci
+```
+
+#### 2. Generate a bootstrap admin password hash
 
 Recommended: keep a **hash** in `.env`, not the plaintext password.
 
@@ -70,15 +174,9 @@ printf '%s' "$PW" | node dist-cli/index.js hash-password --password-stdin --env
 unset PW
 ```
 
-That prints:
+Paste the printed `CODEXUI_ADMIN_PASSWORD_HASH=scrypt$$...` line into `.env`.
 
-```dotenv
-CODEXUI_ADMIN_PASSWORD_HASH=scrypt$$...
-```
-
-`--env` output is already escaped for Docker Compose, so you can paste it into `.env` directly.
-
-### 2. Edit `.env`
+#### 3. Edit `.env`
 
 At minimum, set:
 
@@ -86,8 +184,6 @@ At minimum, set:
 CODEXUI_ADMIN_PASSWORD_HASH=scrypt$$...
 CODEXUI_PUBLIC_URL=http://localhost:4300
 ```
-
-Plaintext bootstrap secrets are no longer supported.
 
 If you use the smoke test or the `docker:hub:register-local` helper, provide the current admin password **at runtime only**:
 
@@ -98,6 +194,7 @@ export CODEXUI_ADMIN_LOGIN_PASSWORD='your-bootstrap-password'
 Useful variables:
 
 ```dotenv
+CODEXUI_IMAGE=codexui-hub:local
 CODEXUI_HOST_PORT=4300
 CODEXUI_DATA_DIR=./.data/hub
 CODEXUI_WORKSPACE_DIR=./workspace
@@ -106,46 +203,27 @@ CODEXUI_SKIP_CODEX_LOGIN=true
 CODEXUI_CODEX_CLI_VERSION=0.110.0
 ```
 
-### 3. Start the Hub
+#### 4. Start the Hub
 
 ```bash
 npm run docker:hub:up
 ```
 
-or:
+or directly:
 
 ```bash
 docker compose up --build -d hub
 ```
 
-### 4. Smoke test
+#### 5. Smoke test
 
 ```bash
 npm run docker:hub:smoke
 ```
 
-### 5. First login: complete the setup wizard
+#### 6. First login and steady-state restarts
 
-- Open `http://localhost:4300`
-- Sign in as the bootstrap admin (`admin` by default) with the plaintext password you used to generate the hash
-- You will be forced to `/setup/bootstrap-admin`
-- Change the admin username and password before using the rest of the Hub
-
-### 6. Remove the bootstrap hash for steady-state restarts
-
-After the setup wizard succeeds, remove the bootstrap hash from `.env`:
-
-```dotenv
-CODEXUI_ADMIN_PASSWORD_HASH=
-CODEXUI_ADMIN_PASSWORD_HASH_FILE=
-```
-
-The Hub can now restart with the rotated SQLite-backed admin account and no bootstrap secret in `.env`.
-
-### 7. Open the UI normally
-
-- URL: `http://localhost:4300` or your configured public URL
-- Username / Password: the rotated admin credentials you set in the setup wizard
+The bootstrap setup wizard and post-setup hash removal steps are identical to the GHCR flow above.
 
 ## Bootstrap admin credential sources
 
@@ -163,11 +241,12 @@ Rules:
 
 ## Docker layout
 
-- `Dockerfile` — production Hub image
-- `docker-compose.yml` — Hub deployment stack
-- `.env` — Docker runtime defaults
-- `docker/hub/entrypoint.sh` — container startup wrapper
-- `scripts/docker/hub-*.sh` — helper commands
+- `Dockerfile` — source-build Hub image for repo / local-build workflows
+- `docker-compose.yml` — dev / local-build Docker stack
+- `docker-compose.ghcr.yml` — GHCR-backed operator deployment stack
+- `.env` — shared Docker runtime defaults for both compose files
+- `docker/hub/entrypoint.sh` — container startup wrapper used by the source-build image
+- `scripts/docker/hub-*.sh` — helper commands for the repo / local-build workflow
 
 Persisted directories:
 

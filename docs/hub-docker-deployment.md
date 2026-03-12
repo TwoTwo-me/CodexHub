@@ -1,14 +1,18 @@
 # Hub Docker Deployment
 
-This is the primary production-style deployment path for this fork.
+This repository now supports two Docker deployment paths:
+
+1. **GHCR quick deploy** for operators who do not want to `git clone`
+2. **Repo / local-build deploy** for development and source-based testing
 
 Run the Hub as a Docker service, then attach remote Codex machines through `codexui-connector`.
 
 ## Files involved
 
-- `Dockerfile`
-- `docker-compose.yml`
-- `.env`
+- `docker-compose.ghcr.yml` — GHCR image deploy path with no local build
+- `.env` — shared settings for both Docker paths
+- `docker-compose.yml` — repo / local-build stack
+- `Dockerfile` — source-build image definition for repo / local-build workflows
 - `docker/hub/entrypoint.sh`
 - `scripts/docker/hub-up.sh`
 - `scripts/docker/hub-down.sh`
@@ -30,6 +34,7 @@ The Hub image now bundles:
 ```dotenv
 COMPOSE_PROJECT_NAME=codexui-hub
 CODEXUI_IMAGE=codexui-hub:local
+CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:main
 CODEXUI_CONTAINER_NAME=codexui-hub
 CODEXUI_EXPOSE_HOST=0.0.0.0
 CODEXUI_HOST_PORT=4300
@@ -39,6 +44,8 @@ CODEXUI_ADMIN_USERNAME=admin
 CODEXUI_ADMIN_PASSWORD_HASH=
 CODEXUI_ADMIN_PASSWORD_HASH_FILE=
 CODEXUI_ADMIN_LOGIN_PASSWORD=
+CODEXUI_ADMIN_PASSWORD=
+CODEXUI_ADMIN_PASSWORD_FILE=
 CODEXUI_DATA_DIR=./.data/hub
 CODEXUI_WORKSPACE_DIR=./workspace
 CODEXUI_CODEX_HOME_DIR=./docker/local-codex
@@ -63,12 +70,56 @@ Commonly adjusted:
 - `CODEXUI_DATA_DIR`
 - `CODEXUI_WORKSPACE_DIR`
 - `CODEXUI_CODEX_HOME_DIR`
+- `CODEXUI_GHCR_IMAGE` (for GHCR quick deploys; pin it to the same release tag as the downloaded files)
 
 ## Recommended bootstrap admin workflow
 
 Use a hash in `.env`, not the plaintext password.
 
-Generate it interactively:
+### GHCR quick deploy (no clone)
+
+Choose a release tag and download only:
+
+- `docker-compose.ghcr.yml`
+- `.env`
+
+For example:
+
+```bash
+export CODEXHUB_TAG=v0.1.4
+mkdir -p codexhub && cd codexhub
+curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/docker-compose.ghcr.yml"
+curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_TAG}/.env"
+```
+
+If the GHCR package is private, run `docker login ghcr.io` before the next step.
+
+Then set:
+
+```dotenv
+CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:v0.1.4
+CODEXUI_PUBLIC_URL=http://localhost:4300
+```
+
+Generate the bootstrap hash with the published image:
+
+```bash
+read -sr -p "Bootstrap admin password: " PW; printf '\n'
+printf '%s' "$PW" | docker run --rm -i --entrypoint node \
+  ghcr.io/twotwo-me/codexhub:v0.1.4 \
+  dist-cli/index.js hash-password --password-stdin --env
+unset PW
+```
+
+Then start:
+
+```bash
+docker compose -f docker-compose.ghcr.yml up -d hub
+```
+
+### Repo / local-build deploy
+
+Generate the hash interactively:
 
 ```bash
 npm run admin:hash-password
@@ -141,7 +192,7 @@ The Hub will continue authenticating against SQLite (`$CODEX_HOME/codexui/hub.sq
 
 ## Start / stop / inspect
 
-### Start
+### Start (repo / local-build)
 
 ```bash
 npm run docker:hub:up
@@ -153,10 +204,22 @@ or directly:
 docker compose up --build -d hub
 ```
 
+### Start (GHCR quick deploy)
+
+```bash
+docker compose -f docker-compose.ghcr.yml up -d hub
+```
+
 ### Smoke test
 
 ```bash
 npm run docker:hub:smoke
+```
+
+For a no-clone GHCR deployment, the simplest readiness probe is:
+
+```bash
+curl http://127.0.0.1:4300/auth/session
 ```
 
 The smoke script verifies:
@@ -172,10 +235,22 @@ The smoke script verifies:
 npm run docker:hub:logs
 ```
 
+GHCR quick deploy:
+
+```bash
+docker compose -f docker-compose.ghcr.yml logs -f hub
+```
+
 ### Stop
 
 ```bash
 npm run docker:hub:down
+```
+
+GHCR quick deploy:
+
+```bash
+docker compose -f docker-compose.ghcr.yml down
 ```
 
 ## Persistence model
