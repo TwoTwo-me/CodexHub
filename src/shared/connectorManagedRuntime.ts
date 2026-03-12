@@ -216,6 +216,7 @@ export async function ensureManagedConnectorRuntimeBundle(statePath: string, sta
   const envPath = deriveManagedConnectorRuntimeEnvPath(statePath)
   const runnerPath = getManagedConnectorRunnerPath(state.connectorId)
   await writeManagedConnectorRuntimeState(statePath, state)
+  await mkdir(dirname(runnerPath), { recursive: true, mode: 0o700 })
   await writeFile(runnerPath, renderManagedConnectorRunnerScript(statePath, envPath), { encoding: 'utf8', mode: 0o700 })
   await chmod(runnerPath, 0o700)
   return { statePath, envPath, runnerPath }

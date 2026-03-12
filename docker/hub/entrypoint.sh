@@ -12,6 +12,7 @@ PASSWORD_HASH_FILE="${CODEXUI_ADMIN_PASSWORD_HASH_FILE:-}"
 PASSWORD_HASH_ENV="${CODEXUI_ADMIN_PASSWORD_HASH:-}"
 PASSWORD_FILE="${CODEXUI_ADMIN_PASSWORD_FILE:-}"
 PASSWORD_ENV="${CODEXUI_ADMIN_PASSWORD:-}"
+WORKSPACE_DIR="${CODEXUI_WORKSPACE_DIR:-/workspace}"
 
 read_secret_file() {
   secret_file="$1"
@@ -55,7 +56,7 @@ elif [ -n "$PASSWORD_HASH_ENV" ]; then
   PASSWORD_HASH="$(normalize_secret_value "$PASSWORD_HASH_ENV")"
 fi
 
-mkdir -p "${CODEX_HOME:-/data/codex-home}" /workspace
+mkdir -p "${CODEX_HOME:-/data/codex-home}" "$WORKSPACE_DIR"
 
 if [ ! -s "${CODEX_HOME:-/data/codex-home}/auth.json" ]; then
   echo "[codexui-entrypoint] No Codex auth.json found at ${CODEX_HOME:-/data/codex-home}/auth.json." >&2

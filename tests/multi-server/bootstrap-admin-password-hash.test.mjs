@@ -375,6 +375,7 @@ test('hub entrypoint translates password hash settings into --password-hash and 
   const binDir = join(tempDir, 'bin')
   const capturePath = join(tempDir, 'node-args.txt')
   const codeHome = join(tempDir, 'codex-home')
+  const workspaceDir = join(tempDir, 'workspace')
 
   await mkdir(binDir, { recursive: true })
   await writeFile(join(binDir, 'node'), `#!/usr/bin/env sh\nprintf '%s\\n' "$@" > "${capturePath}"\n`, {
@@ -387,6 +388,7 @@ test('hub entrypoint translates password hash settings into --password-hash and 
     env: {
       PATH: `${binDir}:${process.env.PATH}`,
       CODEX_HOME: codeHome,
+      CODEXUI_WORKSPACE_DIR: workspaceDir,
       CODEXUI_ADMIN_PASSWORD_HASH: passwordHash,
     },
   })
@@ -402,6 +404,7 @@ test('hub entrypoint translates password hash settings into --password-hash and 
     env: {
       PATH: `${binDir}:${process.env.PATH}`,
       CODEX_HOME: codeHome,
+      CODEXUI_WORKSPACE_DIR: workspaceDir,
       CODEXUI_ADMIN_PASSWORD_HASH: passwordHash,
       CODEXUI_ADMIN_PASSWORD: 'plaintext-secret-1',
     },
@@ -417,6 +420,7 @@ test('hub entrypoint normalizes compose-escaped password hashes before passing -
   const binDir = join(tempDir, 'bin')
   const capturePath = join(tempDir, 'node-args.txt')
   const codeHome = join(tempDir, 'codex-home')
+  const workspaceDir = join(tempDir, 'workspace')
 
   await mkdir(binDir, { recursive: true })
   await writeFile(join(binDir, 'node'), `#!/usr/bin/env sh\nprintf '%s\\n' \"$@\" > \"${capturePath}\"\n`, {
@@ -429,6 +433,7 @@ test('hub entrypoint normalizes compose-escaped password hashes before passing -
     env: {
       PATH: `${binDir}:${process.env.PATH}`,
       CODEX_HOME: codeHome,
+      CODEXUI_WORKSPACE_DIR: workspaceDir,
       CODEXUI_ADMIN_PASSWORD_HASH: composeEscapedHash,
     },
   })
