@@ -233,7 +233,7 @@ test('server-scoped filesystem endpoints dispatch to the selected connector inst
       {
         hostname: 'remote-edge',
         platform: 'linux',
-        connectorVersion: '0.1.4',
+        connectorVersion: '0.1.5',
       },
       {
         Authorization: `Bearer ${bootstrapToken}`,

@@ -8,7 +8,7 @@ const hubUrl = process.env.CODEXUI_HUB_URL?.trim() || 'http://127.0.0.1:4300'
 const containerHubUrl = process.env.CODEXUI_CONTAINER_HUB_URL?.trim() || 'http://172.17.0.1:4300'
 const username = process.env.CODEXUI_TEST_USERNAME?.trim() || 'test'
 const password = process.env.CODEXUI_TEST_PASSWORD?.trim() || 'testtest'
-const connectorVersion = process.env.CODEXUI_CONNECTOR_VERSION?.trim() || '0.1.4'
+const connectorVersion = process.env.CODEXUI_CONNECTOR_VERSION?.trim() || '0.1.5'
 const services = ['codex-cli-a', 'codex-cli-b', 'codex-cli-c']
 const connectors = services.map((service) => ({
   service,

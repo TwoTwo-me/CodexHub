@@ -18,7 +18,7 @@ test('connector package telemetry reports the installed package version', async 
   assert.equal(typeof module.readConnectorVersion, 'function')
 
   const reportedVersion = await module.readConnectorVersion()
-  assert.equal(reportedVersion, '0.1.4')
+  assert.equal(reportedVersion, '0.1.5')
 })
 
 test('managed connector runtime bundle rewrites the runner script and preserves restart exit handling', async () => {
@@ -35,7 +35,7 @@ test('managed connector runtime bundle rewrites the runner script and preserves 
     tokenFilePath: resolve(tempHome, 'edge-alpha.token'),
     packageSpec,
     runnerMode: 'script',
-    currentVersion: '0.1.4',
+    currentVersion: '0.1.5',
   })
 
   const firstBundle = await module.ensureManagedConnectorRuntimeBundle(statePath, state)
@@ -98,7 +98,7 @@ test('managed connector update stages a verified artifact and finalizes the pend
     tokenFilePath: resolve(tempHome, 'edge-alpha.token'),
     packageSpec,
     runnerMode: 'script',
-    currentVersion: '0.1.4',
+    currentVersion: '0.1.5',
   }))
 
   const statuses = []

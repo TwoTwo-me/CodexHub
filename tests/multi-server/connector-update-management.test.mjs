@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..', '..')
-const HUB_COMPATIBILITY_VERSION = '0.1.4'
+const HUB_COMPATIBILITY_VERSION = '0.1.5'
 
 function createBaseEnv(overrides = {}) {
   const env = {
@@ -376,8 +376,8 @@ test('hub rejects connector release registrations above the Hub compatibility ve
     const releaseResponse = await putJson(`${server.baseUrl}/codex-api/admin/connectors/releases`, {
       releases: [
         {
-          version: '0.1.5',
-          artifactUrl: 'https://downloads.example.test/codexui-connector-0.1.5.tgz',
+          version: '0.1.6',
+          artifactUrl: 'https://downloads.example.test/codexui-connector-0.1.6.tgz',
           sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           runnerModes: ['script', 'systemd-user', 'pm2-user'],
           platforms: ['linux'],
@@ -387,7 +387,7 @@ test('hub rejects connector release registrations above the Hub compatibility ve
 
     assert.equal(releaseResponse.status, 400)
     const releaseBody = await releaseResponse.json()
-    assert.match(releaseBody.error, /exceeds Hub compatibility version 0\.1\.4/i)
+    assert.match(releaseBody.error, /exceeds Hub compatibility version 0\.1\.5/i)
   } finally {
     await server.stop()
   }

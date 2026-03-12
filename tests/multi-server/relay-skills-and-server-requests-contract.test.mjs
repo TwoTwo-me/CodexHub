@@ -238,7 +238,7 @@ async function createConnectorCredential(baseUrl, cookie, connectorId) {
     {
       hostname: connectorId,
       platform: 'linux',
-      connectorVersion: '0.1.4',
+      connectorVersion: '0.1.5',
     },
     {
       Authorization: `Bearer ${bootstrapToken}`,

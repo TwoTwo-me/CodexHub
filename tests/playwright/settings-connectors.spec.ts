@@ -45,7 +45,7 @@ type MockConnectorJob = {
   targetVersion?: string
 }
 
-const HUB_COMPATIBILITY_VERSION = '0.1.4'
+const HUB_COMPATIBILITY_VERSION = '0.1.5'
 const HUB_PACKAGE_SPEC = `github:TwoTwo-me/CodexHub#v${HUB_COMPATIBILITY_VERSION}`
 
 function ensureDir(path: string): void {
@@ -325,7 +325,7 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
         lastTelemetryAtIso: '2026-03-07T07:15:00.000Z',
         latestReleaseVersion: HUB_COMPATIBILITY_VERSION,
         latestReleasePublishedAtIso: '2026-03-08T08:00:00.000Z',
-        latestReleaseReleaseNotesUrl: 'https://downloads.example.test/releases/0.1.4',
+        latestReleaseReleaseNotesUrl: 'https://downloads.example.test/releases/0.1.5',
         updateStatus: 'update_available',
       },
       {
@@ -351,7 +351,7 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
           action: 'update',
           status: 'healthy',
           requestedAtIso: '2026-03-07T08:00:00.000Z',
-          targetVersion: '0.1.4',
+          targetVersion: '0.1.5',
         },
       ],
     } as Record<string, MockConnectorJob[]>,
@@ -371,13 +371,13 @@ test('settings page manages connector bootstrap lifecycle end-to-end', async ({ 
   await expect(page.getByText('4 threads')).toBeVisible()
   await expect(page.getByText('Connected').first()).toBeVisible()
   await expect(page.locator('input[value="0.1.3"]').first()).toBeVisible()
-  await expect(page.locator('input[value="0.1.4"]').first()).toBeVisible()
+  await expect(page.locator('input[value="0.1.5"]').first()).toBeVisible()
   await expect(page.getByText('Update available')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Restart connector' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Update connector' })).toBeVisible()
   await page.getByRole('button', { name: 'Update connector' }).click()
   await expect(page.getByText('job-build-runner-update').first()).toBeVisible()
-  await expect(page.getByText('Target version 0.1.4')).toBeVisible()
+  await expect(page.getByText('Target version 0.1.5')).toBeVisible()
 
   await page.getByLabel('Connector name').fill('Alpha Laptop')
   await page.getByLabel('Connector id').fill('alpha-laptop')
