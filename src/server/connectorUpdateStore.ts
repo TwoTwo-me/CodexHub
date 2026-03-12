@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto'
+import packageJson from '../../package.json'
 import { readStateEntry, writeStateEntry } from './sqliteStore.js'
 import type { ConnectorRunnerMode } from '../shared/connectorManagedRuntime.js'
+import { createVersionPinnedConnectorPackageSpec } from '../shared/connectorInstallCommand.js'
 
 export type ConnectorReleaseRecord = {
   version: string
@@ -11,6 +13,12 @@ export type ConnectorReleaseRecord = {
   publishedAtIso?: string
   runnerModes?: ConnectorRunnerMode[]
   platforms?: string[]
+}
+
+export type ConnectorCompatibilityRelease = {
+  version: string
+  packageSpec: string
+  releaseNotesUrl?: string
 }
 
 export type ConnectorUpdateStatus = 'unknown' | 'up_to_date' | 'update_available' | 'unsupported'
@@ -36,6 +44,7 @@ export type ConnectorUpdateJobRecord = {
 const RELEASE_SCOPE = 'hub'
 const RELEASE_ENTRY_KEY = 'connector-release-manifest-v1'
 const UPDATE_JOBS_SCOPE_PREFIX = 'connector-update-jobs:'
+const HUB_COMPATIBILITY_VERSION = normalizeHubCompatibilityVersion(packageJson.version)
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -44,6 +53,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeHubCompatibilityVersion(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
@@ -115,6 +128,11 @@ export function compareConnectorVersions(left: string, right: string): number {
   return parsedLeft.prerelease.localeCompare(parsedRight.prerelease)
 }
 
+function isWithinHubCompatibilityCeiling(version: string): boolean {
+  if (!HUB_COMPATIBILITY_VERSION) return true
+  return compareConnectorVersions(version, HUB_COMPATIBILITY_VERSION) <= 0
+}
+
 function releaseMatchesPlatform(release: ConnectorReleaseRecord, platform?: string): boolean {
   if (!release.platforms || release.platforms.length === 0) {
     return true
@@ -141,9 +159,20 @@ export function normalizeConnectorReleaseCatalog(value: unknown): ConnectorRelea
   const releases = rows
     .map((entry) => normalizeReleaseRecord(entry))
     .filter((entry): entry is ConnectorReleaseRecord => !!entry)
+    .filter((entry) => isWithinHubCompatibilityCeiling(entry.version))
 
   releases.sort((left, right) => compareConnectorVersions(right.version, left.version))
   return releases
+}
+
+export function readHubCompatibilityRelease(): ConnectorCompatibilityRelease | null {
+  return HUB_COMPATIBILITY_VERSION
+    ? {
+        version: HUB_COMPATIBILITY_VERSION,
+        packageSpec: createVersionPinnedConnectorPackageSpec(HUB_COMPATIBILITY_VERSION),
+        releaseNotesUrl: `https://github.com/TwoTwo-me/CodexHub/releases/tag/v${HUB_COMPATIBILITY_VERSION}`,
+      }
+    : null
 }
 
 export function readConnectorReleaseCatalog(): ConnectorReleaseRecord[] {
@@ -169,14 +198,24 @@ export function resolveLatestCompatibleConnectorRelease(input: {
 export function deriveConnectorUpdateStatus(input: {
   currentVersion?: string
   updateCapable?: boolean
+  compatibilityRelease: ConnectorCompatibilityRelease | null
   latestRelease: ConnectorReleaseRecord | null
 }): ConnectorUpdateStatus {
   if (!input.updateCapable) return 'unsupported'
-  if (!input.latestRelease) return 'unknown'
-  if (!input.currentVersion) return 'update_available'
-  return compareConnectorVersions(input.currentVersion, input.latestRelease.version) >= 0
-    ? 'up_to_date'
-    : 'update_available'
+  if (!input.compatibilityRelease) return 'unknown'
+  if (!input.currentVersion) {
+    return input.latestRelease ? 'update_available' : 'unknown'
+  }
+  const compatibilityComparison = compareConnectorVersions(input.currentVersion, input.compatibilityRelease.version)
+  if (compatibilityComparison > 0) {
+    return input.latestRelease ? 'update_available' : 'unsupported'
+  }
+  if (compatibilityComparison === 0) {
+    return 'up_to_date'
+  }
+  return input.latestRelease
+    ? 'update_available'
+    : 'unknown'
 }
 
 function normalizeJobStatus(value: unknown): ConnectorUpdateJobStatus | undefined {

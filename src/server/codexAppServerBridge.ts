@@ -73,9 +73,11 @@ import {
 } from '../shared/serverMethodCatalogBridge.js'
 import type { ConnectorRunnerMode } from '../shared/connectorManagedRuntime.js'
 import {
+  compareConnectorVersions,
   createConnectorUpdateJob,
   deriveConnectorUpdateStatus,
   hasActiveConnectorUpdateJob,
+  readHubCompatibilityRelease,
   readConnectorReleaseCatalog,
   readConnectorUpdateJobs,
   resolveLatestCompatibleConnectorRelease,
@@ -83,6 +85,7 @@ import {
   writeConnectorReleaseCatalog,
   writeConnectorUpdateJobs,
   type ConnectorReleaseRecord,
+  type ConnectorCompatibilityRelease,
   type ConnectorUpdateJobAction,
   type ConnectorUpdateJobRecord,
   type ConnectorUpdateJobStatus,
@@ -2004,15 +2007,16 @@ async function buildConnectorPublicRecords(
 
     return {
       nextConnector,
-      publicRecord: toPublicConnectorRecord(nextConnector, relayHub, {
-        projectCount,
-        threadCount,
-        lastStatsAtIso,
-        ...(includeStats ? { statsStale } : {}),
-        latestRelease: resolveLatestCompatibleConnectorRelease({
-          runnerMode: nextConnector.runnerMode,
-          platform: nextConnector.platform,
-        }),
+        publicRecord: toPublicConnectorRecord(nextConnector, relayHub, {
+          projectCount,
+          threadCount,
+          lastStatsAtIso,
+          ...(includeStats ? { statsStale } : {}),
+          compatibilityRelease: readHubCompatibilityRelease(),
+          latestUpdateRelease: resolveLatestCompatibleConnectorRelease({
+            runnerMode: nextConnector.runnerMode,
+            platform: nextConnector.platform,
+          }),
       }),
     }
   }))
@@ -2032,12 +2036,14 @@ function toPublicConnectorRecord(
     threadCount?: number
     lastStatsAtIso?: string
     statsStale?: boolean
-    latestRelease?: ConnectorReleaseRecord | null
+    compatibilityRelease?: ConnectorCompatibilityRelease | null
+    latestUpdateRelease?: ConnectorReleaseRecord | null
   } = {},
 ): CodexConnectorPublicRecord {
   const relayAgent = relayHub.getAgent(connector.relayAgentId)
   const connected = relayAgent?.connected ?? false
-  const latestRelease = options.latestRelease
+  const compatibilityRelease = options.compatibilityRelease ?? readHubCompatibilityRelease()
+  const latestUpdateRelease = options.latestUpdateRelease
     ?? resolveLatestCompatibleConnectorRelease({
       runnerMode: connector.runnerMode,
       platform: connector.platform,
@@ -2045,8 +2051,12 @@ function toPublicConnectorRecord(
   const updateStatus = deriveConnectorUpdateStatus({
     currentVersion: connector.connectorVersion,
     updateCapable: connector.updateCapable,
-    latestRelease,
+    compatibilityRelease,
+    latestRelease: latestUpdateRelease,
   })
+  const matchingUpdateRelease = compatibilityRelease?.version && latestUpdateRelease?.version === compatibilityRelease.version
+    ? latestUpdateRelease
+    : null
   return {
     id: connector.id,
     serverId: connector.serverId,
@@ -2074,9 +2084,9 @@ function toPublicConnectorRecord(
     ...(connector.updateCapable !== undefined ? { updateCapable: connector.updateCapable } : {}),
     ...(connector.restartCapable !== undefined ? { restartCapable: connector.restartCapable } : {}),
     ...(connector.lastTelemetryAtIso ? { lastTelemetryAtIso: connector.lastTelemetryAtIso } : {}),
-    ...(latestRelease?.version ? { latestReleaseVersion: latestRelease.version } : {}),
-    ...(latestRelease?.publishedAtIso ? { latestReleasePublishedAtIso: latestRelease.publishedAtIso } : {}),
-    ...(latestRelease?.releaseNotesUrl ? { latestReleaseReleaseNotesUrl: latestRelease.releaseNotesUrl } : {}),
+    ...(compatibilityRelease?.version ? { latestReleaseVersion: compatibilityRelease.version } : {}),
+    ...(matchingUpdateRelease?.publishedAtIso ? { latestReleasePublishedAtIso: matchingUpdateRelease.publishedAtIso } : {}),
+    ...(compatibilityRelease?.releaseNotesUrl ? { latestReleaseReleaseNotesUrl: compatibilityRelease.releaseNotesUrl } : {}),
     updateStatus,
   }
 }
@@ -3748,6 +3758,17 @@ export function createCodexBridgeMiddleware(options: CodexBridgeOptions = {}): C
             ...(platforms.length > 0 ? { platforms } : {}),
           } satisfies ConnectorReleaseRecord]
         })
+
+        const compatibilityRelease = readHubCompatibilityRelease()
+        const incompatibleRelease = compatibilityRelease
+          ? normalizedReleases.find((release) => compareConnectorVersions(release.version, compatibilityRelease.version) > 0)
+          : undefined
+        if (incompatibleRelease && compatibilityRelease) {
+          setJson(res, 400, {
+            error: `Connector release ${incompatibleRelease.version} exceeds Hub compatibility version ${compatibilityRelease.version}.`,
+          })
+          return
+        }
 
         writeConnectorReleaseCatalog(normalizedReleases)
         setJson(res, 200, {

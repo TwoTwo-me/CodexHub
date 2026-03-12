@@ -1,4 +1,18 @@
-export const CONNECTOR_NPM_PACKAGE_SPEC = 'github:TwoTwo-me/CodexHub#main'
+import packageJson from '../../package.json'
+
+const CONNECTOR_PACKAGE_REPO_SPEC = 'github:TwoTwo-me/CodexHub'
+
+function normalizeConnectorPackageVersion(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export function createVersionPinnedConnectorPackageSpec(version = normalizeConnectorPackageVersion(packageJson.version)): string {
+  return version.length > 0
+    ? `${CONNECTOR_PACKAGE_REPO_SPEC}#v${version}`
+    : `${CONNECTOR_PACKAGE_REPO_SPEC}#main`
+}
+
+export const CONNECTOR_NPM_PACKAGE_SPEC = createVersionPinnedConnectorPackageSpec()
 export const CONNECTOR_BIN_NAME = 'codexui-connector'
 const MASKED_TOKEN_PLACEHOLDER = '••••••••••••••••'
 
