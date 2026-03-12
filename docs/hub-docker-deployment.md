@@ -34,7 +34,7 @@ The Hub image now bundles:
 ```dotenv
 COMPOSE_PROJECT_NAME=codexui-hub
 CODEXUI_IMAGE=codexui-hub:local
-CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:main
+CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:v0.1.5
 CODEXUI_CONTAINER_NAME=codexui-hub
 CODEXUI_EXPOSE_HOST=0.0.0.0
 CODEXUI_HOST_PORT=4300
@@ -83,10 +83,10 @@ Choose a release tag and download only:
 - `docker-compose.ghcr.yml`
 - `.env`
 
-For example, use `main` for the latest branch build or swap in a release tag such as `v0.1.5` after it has been published:
+For example, pin both the downloaded files and the GHCR image to `v0.1.5`. If you specifically want the latest branch build instead, replace `v0.1.5` with `main`:
 
 ```bash
-export CODEXHUB_REF=main
+export CODEXHUB_REF=v0.1.5
 mkdir -p codexhub && cd codexhub
 curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/docker-compose.ghcr.yml"
 curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/.env"
@@ -97,7 +97,7 @@ If the GHCR package is private, run `docker login ghcr.io` before the next step.
 Then set:
 
 ```dotenv
-CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:main
+CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:v0.1.5
 CODEXUI_PUBLIC_URL=http://localhost:4300
 ```
 

@@ -65,14 +65,14 @@ This path only needs:
 - `.env`
 - Docker + Docker Compose
 
-The examples below use the same Git ref for both the downloaded files and the GHCR image. Use `main` for the latest branch build, or replace it with a release tag such as `v0.1.5` once that tag has been published. If the GHCR package is private, run `docker login ghcr.io` first.
+The examples below pin the downloaded files and GHCR image to the same release tag. If you specifically want the latest branch build instead, replace `v0.1.5` with `main`. If the GHCR package is private, run `docker login ghcr.io` first.
 
 #### 1. Download the deployment files
 
 With `curl`:
 
 ```bash
-export CODEXHUB_REF=main
+export CODEXHUB_REF=v0.1.5
 mkdir -p codexhub && cd codexhub
 curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/docker-compose.ghcr.yml"
 curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/.env"
@@ -81,7 +81,7 @@ curl -fsSLO "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF
 With `wget`:
 
 ```bash
-export CODEXHUB_REF=main
+export CODEXHUB_REF=v0.1.5
 mkdir -p codexhub && cd codexhub
 wget "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/docker-compose.ghcr.yml"
 wget "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/.env"
@@ -92,7 +92,7 @@ wget "https://raw.githubusercontent.com/TwoTwo-me/CodexHub/${CODEXHUB_REF}/.env"
 Edit `.env` and set at minimum:
 
 ```dotenv
-CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:main
+CODEXUI_GHCR_IMAGE=ghcr.io/twotwo-me/codexhub:v0.1.5
 CODEXUI_PUBLIC_URL=http://localhost:4300
 ```
 
